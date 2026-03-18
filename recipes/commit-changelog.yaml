@@ -1,0 +1,11 @@
+# recipes/commit-changelog.yaml
+name: commit-changelog
+trigger:
+  event: git.push
+actions:
+  - type: shell
+    command: >
+      cd /Users/mrap/hex &&
+      LAST_COMMIT=$(git log -1 --format='%h %s') &&
+      LANDINGS=$(ls landings/ | sort | tail -1) &&
+      echo "- $(date +%H:%M) — Git push: $LAST_COMMIT" >> "landings/$LANDINGS"

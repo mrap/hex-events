@@ -1,0 +1,11 @@
+# recipes/file-triage.yaml
+name: file-triage
+trigger:
+  event: file.created
+conditions:
+  - field: path
+    op: contains
+    value: raw/captures/
+actions:
+  - type: shell
+    command: 'echo "New capture: {{ event.path }}" >> /Users/mrap/.hex-events/daemon.log'
