@@ -1,0 +1,211 @@
+# policy.py
+"""Policy loader for hex-events v2.
+
+Evolves recipe.py to support multi-rule policies with metadata, rate limiting,
+and static provides/requires declarations. Backwards-compatible with old recipe
+YAML format (auto-wrapped as a single-rule policy).
+"""
+import fnmatch
+import logging
+import os
+import time
+from dataclasses import dataclass, field
+from typing import Optional
+
+import yaml
+from db import parse_duration
+
+log = logging.getLogger("hex-events")
+
+
+# ---------------------------------------------------------------------------
+# Canonical dataclasses (Condition and Action live here; recipe.py re-exports)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class Condition:
+    field: str
+    op: str
+    value: str | int | float | bool
+
+
+@dataclass
+class Action:
+    type: str
+    params: dict  # all other fields from the action dict
+
+
+@dataclass
+class Rule:
+    """A single event-condition-action rule inside a policy."""
+    name: str
+    trigger_event: str  # supports glob patterns
+    conditions: list[Condition] = field(default_factory=list)
+    actions: list[Action] = field(default_factory=list)
+
+    def matches_event_type(self, event_type: str) -> bool:
+        return fnmatch.fnmatch(event_type, self.trigger_event)
+
+
+@dataclass
+class Policy:
+    """A named group of rules with metadata and rate limiting."""
+    name: str
+    rules: list[Rule]
+    description: str = ""
+    standing_orders: list[str] = field(default_factory=list)
+    reflection_ids: list[str] = field(default_factory=list)
+    provides: dict = field(default_factory=dict)   # {"events": [...]}
+    requires: dict = field(default_factory=dict)   # {"events": [...]}
+    rate_limit: Optional[dict] = None              # {"max_fires": N, "window": "1h"}
+    source_file: Optional[str] = None
+    # Runtime state — not from YAML
+    last_fires: list[float] = field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Rate limiting helpers
+# ---------------------------------------------------------------------------
+
+def check_rate_limit(policy: Policy) -> bool:
+    """Return True if the policy is allowed to fire now."""
+    if not policy.rate_limit:
+        return True
+    max_fires = policy.rate_limit.get("max_fires", 0)
+    window_str = policy.rate_limit.get("window", "1h")
+    window_secs = parse_duration(str(window_str))
+    cutoff = time.time() - window_secs
+    recent = [t for t in policy.last_fires if t >= cutoff]
+    return len(recent) < max_fires
+
+
+def record_fire(policy: Policy) -> None:
+    """Record a policy fire timestamp for rate-limit accounting."""
+    policy.last_fires.append(time.time())
+
+
+# ---------------------------------------------------------------------------
+# Internal parsers
+# ---------------------------------------------------------------------------
+
+def _parse_conditions(raw: list) -> list[Condition]:
+    return [
+        Condition(field=c["field"], op=c["op"], value=c["value"])
+        for c in (raw or [])
+    ]
+
+
+def _parse_actions(raw: list) -> list[Action]:
+    actions = []
+    for a in (raw or []):
+        atype = a["type"]
+        params = {k: v for k, v in a.items() if k != "type"}
+        actions.append(Action(type=atype, params=params))
+    return actions
+
+
+def _parse_rule(data: dict, policy_name: str, idx: int) -> Rule:
+    name = data.get("name") or f"{policy_name}.rule-{idx}"
+    trigger_event = data["trigger"]["event"]
+    conditions = _parse_conditions(data.get("conditions", []))
+    actions = _parse_actions(data.get("actions", []))
+    return Rule(name=name, trigger_event=trigger_event,
+                conditions=conditions, actions=actions)
+
+
+def _infer_provides_requires(trigger_event: str, actions: list[Action]) -> tuple[dict, dict]:
+    """Infer provides/requires from old-format recipe fields."""
+    emitted = [a.params["event"] for a in actions
+               if a.type == "emit" and "event" in a.params]
+    provides = {"events": emitted} if emitted else {}
+    requires = {"events": [trigger_event]} if trigger_event else {}
+    return provides, requires
+
+
+# ---------------------------------------------------------------------------
+# Policy loading
+# ---------------------------------------------------------------------------
+
+def _is_new_format(data: dict) -> bool:
+    """Return True if the YAML uses the new policy format (has 'rules' list)."""
+    return "rules" in data and isinstance(data["rules"], list)
+
+
+def _is_old_format(data: dict) -> bool:
+    """Return True if the YAML uses the old recipe format (has 'trigger' + 'actions')."""
+    return "trigger" in data and "actions" in data and "name" in data
+
+
+def _policy_from_new(data: dict, source_file: str) -> Policy:
+    rules = [_parse_rule(r, data["name"], i) for i, r in enumerate(data["rules"])]
+    return Policy(
+        name=data["name"],
+        description=data.get("description", ""),
+        standing_orders=list(data.get("standing_orders", []) or []),
+        reflection_ids=list(data.get("reflection_ids", []) or []),
+        provides=dict(data.get("provides") or {}),
+        requires=dict(data.get("requires") or {}),
+        rate_limit=data.get("rate_limit"),
+        rules=rules,
+        source_file=source_file,
+    )
+
+
+def _policy_from_old(data: dict, source_file: str) -> Policy:
+    """Auto-wrap an old recipe YAML into a single-rule Policy."""
+    trigger_event = data["trigger"]["event"]
+    conditions = _parse_conditions(data.get("conditions", []))
+    actions = _parse_actions(data["actions"])
+
+    rule = Rule(
+        name=data["name"],
+        trigger_event=trigger_event,
+        conditions=conditions,
+        actions=actions,
+    )
+
+    provides, requires = _infer_provides_requires(trigger_event, actions)
+
+    return Policy(
+        name=data["name"],
+        description=data.get("description", ""),
+        standing_orders=[],
+        reflection_ids=[],
+        provides=provides,
+        requires=requires,
+        rate_limit=None,
+        rules=[rule],
+        source_file=source_file,
+    )
+
+
+def load_policies(policies_dir: str) -> list[Policy]:
+    """Load all .yaml/.yml files from a directory into Policy objects.
+
+    Supports both new policy format (has 'rules' array) and old recipe format
+    (has 'trigger' + 'actions'). Old format is auto-wrapped as a single-rule
+    policy with inferred provides/requires.
+    """
+    policies = []
+    for fname in sorted(os.listdir(policies_dir)):
+        if not fname.endswith((".yaml", ".yml")):
+            continue
+        fpath = os.path.join(policies_dir, fname)
+        try:
+            with open(fpath) as f:
+                data = yaml.safe_load(f)
+            if not isinstance(data, dict):
+                log.warning("Skipping non-dict YAML: %s", fpath)
+                continue
+            if _is_new_format(data):
+                if "name" not in data:
+                    log.warning("Skipping policy without name: %s", fpath)
+                    continue
+                policies.append(_policy_from_new(data, source_file=fpath))
+            elif _is_old_format(data):
+                policies.append(_policy_from_old(data, source_file=fpath))
+            else:
+                log.warning("Skipping unrecognized YAML format: %s", fpath)
+        except Exception as e:
+            log.warning("Failed to load policy %s: %s", fpath, e)
+    return policies

@@ -1,0 +1,54 @@
+name: landings-staleness
+description: >
+  Enforces R-033: landings doc must be updated within 10 minutes of each git commit.
+  Arms a delayed check on each commit; fires policy.violation if no landings.updated
+  event is recorded within the window. Notifies on repeated violations.
+standing_orders:
+  - "9"
+reflection_ids:
+  - R-033
+provides:
+  events:
+    - landings.check-due
+    - policy.violation
+requires:
+  events:
+    - git.commit
+    - landings.updated
+rate_limit:
+  max_fires: 20
+  window: 1h
+rules:
+  - name: arm-check-on-commit
+    trigger:
+      event: git.commit
+    actions:
+      - type: emit
+        event: landings.check-due
+        delay: 10m
+        cancel_group: landings-check
+
+  - name: check-landings-staleness
+    trigger:
+      event: landings.check-due
+    conditions:
+      - field: "count(landings.updated, 10m)"
+        op: eq
+        value: 0
+    actions:
+      - type: emit
+        event: policy.violation
+        payload:
+          rule: R-033
+          message: "landings doc not updated within 10 minutes of git commit"
+
+  - name: notify-repeated-violations
+    trigger:
+      event: policy.violation
+    conditions:
+      - field: "count(policy.violation, 168h)"
+        op: gte
+        value: 3
+    actions:
+      - type: notify
+        message: "R-033 violation: landings doc not updated within 10 min of commit (3+ violations in 7 days)"

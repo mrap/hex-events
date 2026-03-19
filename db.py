@@ -12,7 +12,8 @@ CREATE TABLE IF NOT EXISTS events (
     source TEXT NOT NULL,
     created_at TEXT DEFAULT (datetime('now')),
     processed_at TEXT,
-    recipe TEXT
+    recipe TEXT,
+    dedup_key TEXT
 );
 CREATE TABLE IF NOT EXISTS action_log (
     id INTEGER PRIMARY KEY,
@@ -24,10 +25,53 @@ CREATE TABLE IF NOT EXISTS action_log (
     error_message TEXT,
     executed_at TEXT DEFAULT (datetime('now'))
 );
+CREATE TABLE IF NOT EXISTS deferred_events (
+    id INTEGER PRIMARY KEY,
+    event_type TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    source TEXT NOT NULL,
+    fire_at TEXT NOT NULL,
+    cancel_group TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+);
 CREATE INDEX IF NOT EXISTS idx_events_unprocessed ON events(processed_at) WHERE processed_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type);
 CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at);
+CREATE INDEX IF NOT EXISTS idx_events_dedup ON events(dedup_key) WHERE dedup_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_deferred_fire_at ON deferred_events(fire_at);
 """
+
+
+def parse_duration(s) -> int:
+    """Parse a duration string to seconds. Supports s, m, h, d suffixes.
+
+    Examples:
+        '30s' -> 30
+        '10m' -> 600
+        '2h'  -> 7200
+        '1d'  -> 86400
+        '1'   -> 3600  (bare integer treated as hours, backwards compat)
+
+    Raises ValueError on invalid input (None, empty string, bad suffix, non-numeric prefix).
+    """
+    if s is None:
+        raise ValueError(f"Invalid duration string None: expected format like 10m, 2h, 1d, 30s")
+    s = str(s).strip()
+    if not s:
+        raise ValueError(f"Invalid duration string '': expected format like 10m, 2h, 1d, 30s")
+    suffixes = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+    if s[-1] in suffixes:
+        numeric = s[:-1]
+        try:
+            return int(numeric) * suffixes[s[-1]]
+        except ValueError:
+            raise ValueError(f"Invalid duration string {s!r}: expected format like 10m, 2h, 1d, 30s")
+    # Bare integer: treat as hours (backwards compatibility)
+    try:
+        return int(s) * 3600
+    except ValueError:
+        raise ValueError(f"Invalid duration string {s!r}: expected format like 10m, 2h, 1d, 30s")
+
 
 class EventsDB:
     def __init__(self, path: str):
@@ -36,14 +80,31 @@ class EventsDB:
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA busy_timeout=5000")
         self.conn.executescript(SCHEMA)
+        self._migrate()
+
+    def _migrate(self):
+        """Add columns to existing tables that predate schema additions."""
+        cols = [r[1] for r in self.conn.execute("PRAGMA table_info(events)").fetchall()]
+        if "dedup_key" not in cols:
+            self.conn.execute("ALTER TABLE events ADD COLUMN dedup_key TEXT")
+            self.conn.commit()
 
     def close(self):
         self.conn.close()
 
-    def insert_event(self, event_type: str, payload: str, source: str) -> int:
+    def insert_event(self, event_type: str, payload: str, source: str,
+                     dedup_key: str | None = None) -> int | None:
+        """Insert an event. Returns row id, or None if deduped."""
+        if dedup_key:
+            existing = self.conn.execute(
+                "SELECT id FROM events WHERE dedup_key = ? AND processed_at IS NOT NULL",
+                (dedup_key,),
+            ).fetchone()
+            if existing:
+                return None  # already processed, skip
         cur = self.conn.execute(
-            "INSERT INTO events (event_type, payload, source) VALUES (?, ?, ?)",
-            (event_type, payload, source),
+            "INSERT INTO events (event_type, payload, source, dedup_key) VALUES (?, ?, ?, ?)",
+            (event_type, payload, source, dedup_key),
         )
         self.conn.commit()
         return cur.lastrowid
@@ -76,10 +137,22 @@ class EventsDB:
         ).fetchall()
         return [dict(r) for r in rows]
 
-    def count_events(self, event_type: str, hours: int = 1) -> int:
+    def count_events(self, event_type: str, seconds: int | None = None,
+                     hours: int | None = None) -> int:
+        """Count events of event_type within a time window.
+
+        Pass either seconds= or hours= (hours kept for backwards compat).
+        If neither is provided, defaults to 1 hour.
+        """
+        if seconds is None:
+            if hours is not None:
+                seconds = hours * 3600
+            else:
+                seconds = 3600
         row = self.conn.execute(
-            "SELECT COUNT(*) as cnt FROM events WHERE event_type = ? AND created_at >= datetime('now', ?)",
-            (event_type, f"-{hours} hours"),
+            "SELECT COUNT(*) as cnt FROM events WHERE event_type = ? "
+            "AND created_at >= datetime('now', ?)",
+            (event_type, f"-{seconds} seconds"),
         ).fetchone()
         return row["cnt"]
 
@@ -105,3 +178,36 @@ class EventsDB:
         )
         self.conn.commit()
         return cur.rowcount
+
+    # -----------------------------------------------------------------------
+    # Deferred events
+    # -----------------------------------------------------------------------
+
+    def insert_deferred(self, event_type: str, payload: str, source: str,
+                        fire_at: str, cancel_group: str | None = None):
+        """Insert a deferred event. cancel_group replaces any existing row with same group."""
+        if cancel_group:
+            self.conn.execute(
+                "DELETE FROM deferred_events WHERE cancel_group = ?", (cancel_group,)
+            )
+        self.conn.execute(
+            "INSERT INTO deferred_events (event_type, payload, source, fire_at, cancel_group) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (event_type, payload, source, fire_at, cancel_group),
+        )
+        self.conn.commit()
+
+    def get_due_deferred(self, now: str | None = None) -> list[dict]:
+        """Return deferred events whose fire_at <= now."""
+        if now is None:
+            now = datetime.utcnow().isoformat()
+        rows = self.conn.execute(
+            "SELECT * FROM deferred_events WHERE fire_at <= ? ORDER BY fire_at",
+            (now,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def delete_deferred(self, row_id: int):
+        """Delete a deferred event by id (dual-write safety: delete before promoting)."""
+        self.conn.execute("DELETE FROM deferred_events WHERE id = ?", (row_id,))
+        self.conn.commit()

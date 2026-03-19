@@ -1,0 +1,17 @@
+# Scheduler adapter configuration for hex-events
+# Each schedule emits a timer event on the specified cron expression.
+# Timer events use dedup_key to prevent double-firing within the same window.
+# See docs/design-v2.md for the timer model.
+
+schedules:
+  - name: 30m-tick
+    cron: "*/30 * * * *"
+    event: timer.tick.30m
+
+  - name: 1h-tick
+    cron: "0 * * * *"
+    event: timer.tick.1h
+
+  - name: daily-tick
+    cron: "0 0 * * *"
+    event: timer.tick.daily
