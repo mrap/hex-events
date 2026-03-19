@@ -1,0 +1,41 @@
+name: boi-completion-gate
+description: >
+  Enforces clean, tested, pushed code before a BOI spec is truly done.
+  Triggers on boi.spec.completed, runs verify-boi-completion.sh, and
+  emits boi.completion.verified on success or policy.violation on failure.
+standing_orders:
+  - "6"
+  - "12"
+reflection_ids:
+  - R-028
+  - R-047
+provides:
+  events:
+    - boi.completion.verified
+    - policy.violation
+requires:
+  events:
+    - boi.spec.completed
+rules:
+  - name: verify-on-spec-completed
+    trigger:
+      event: boi.spec.completed
+    actions:
+      - type: shell
+        command: >
+          bash ~/.hex-events/scripts/verify-boi-completion.sh
+          "{{ event.spec_id }}"
+          "{{ event.target_repo }}"
+        on_success:
+          - type: emit
+            event: boi.completion.verified
+            payload:
+              spec_id: "{{ event.spec_id }}"
+              target_repo: "{{ event.target_repo }}"
+        on_failure:
+          - type: emit
+            event: policy.violation
+            payload:
+              policy: boi-completion-gate
+              spec_id: "{{ event.spec_id }}"
+              message: "{{ action.stderr }}"
