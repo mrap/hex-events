@@ -17,4 +17,4 @@ rules:
         value: raw/captures/
     actions:
       - type: shell
-        command: 'echo "New capture: {{ event.path }}" >> /Users/mrap/.hex-events/daemon.log'
+        command: 'echo "New capture: {{ event.path }}" >> ~/.hex-events/daemon.log'

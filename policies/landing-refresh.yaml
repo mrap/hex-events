@@ -17,4 +17,4 @@ rules:
         value: landings/
     actions:
       - type: shell
-        command: bash /Users/mrap/hex/.claude/scripts/landings-dashboard.sh --refresh 2>/dev/null || true
+        command: bash ~/hex/.claude/scripts/landings-dashboard.sh --refresh 2>/dev/null || true
