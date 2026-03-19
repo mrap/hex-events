@@ -13,7 +13,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from db import EventsDB
-from recipe import Recipe, load_recipes
+from recipe import Recipe
 from policy import load_policies, check_rate_limit, record_fire
 from conditions import evaluate_conditions
 from actions import get_action_handler
@@ -21,7 +21,6 @@ from adapters.scheduler import SchedulerAdapter
 
 BASE_DIR = os.path.expanduser("~/.hex-events")
 DB_PATH = os.path.join(BASE_DIR, "events.db")
-RECIPES_DIR = os.path.join(BASE_DIR, "recipes")
 POLICIES_DIR = os.path.join(BASE_DIR, "policies")
 SCHEDULER_CONFIG = os.path.join(BASE_DIR, "adapters", "scheduler.yaml")
 POLL_INTERVAL = 2  # seconds
@@ -190,22 +189,14 @@ def run_daemon():
     last_janitor = 0
     last_recipe_load = 0
     last_scheduler_reload = 0
-    recipes = []
     _policies = []
 
     while running:
         now = time.time()
 
-        # Reload policies/recipes every 10 seconds (hot-reload).
-        # Prefer policies/ dir if it exists; fall back to recipes/ for backwards compat.
+        # Reload policies every 10 seconds (hot-reload).
         if now - last_recipe_load > 10:
-            if os.path.isdir(POLICIES_DIR):
-                _policies = load_policies(POLICIES_DIR)
-                recipes = []  # unused in policies mode
-            else:
-                _policies = []
-                os.makedirs(RECIPES_DIR, exist_ok=True)
-                recipes = load_recipes(RECIPES_DIR)
+            _policies = load_policies(POLICIES_DIR)
             last_recipe_load = now
 
         # Reload scheduler config periodically
@@ -229,10 +220,7 @@ def run_daemon():
         try:
             events = db.get_unprocessed()
             for event in events:
-                if _policies:
-                    _process_event_policies(event, _policies, db)
-                else:
-                    process_event(event, recipes, db)
+                _process_event_policies(event, _policies, db)
         except Exception as e:
             log.error("Error processing events: %s", e)
 

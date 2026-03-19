@@ -266,3 +266,44 @@ Run `hex-events validate` after conversion to verify event graph is consistent.
 - **No GUI.** CLI (`hex-events`) is the only interface.
 - **No hot-reload of adapters.** Adapter config changes require daemon restart.
 - **No per-rule rate limits.** Rate limiting is per-policy only.
+
+## Testing
+
+### Unit and Integration Tests
+
+Run the full test suite (requires venv set up via `install.sh`):
+
+```bash
+make test
+# or directly:
+./venv/bin/python3 -m pytest tests/ -v --tb=short
+```
+
+### Docker Smoke Test
+
+The smoke test verifies end-to-end behavior in a clean container with no pre-existing state:
+
+```bash
+make smoke
+# or directly:
+docker build -t hex-events-test -f tests/Dockerfile.install .
+docker run --rm hex-events-test
+```
+
+### What the Smoke Test Verifies
+
+1. **Install script** (`install.sh`) runs successfully in a clean environment
+2. **Dependencies** are importable (`yaml`, `croniter`, `jinja2`)
+3. **Database** is initialized (`events.db` exists with correct schema)
+4. **Daemon** starts in the background without errors
+5. **Event emission** works (`hex_emit.py` successfully writes to the DB)
+6. **Event processing** completes (emitted event gets `processed_at` set)
+7. **Validator** passes (`hex_events_cli.py validate` exits 0)
+8. **Full test suite** passes inside the container
+9. **Daemon shutdown** completes cleanly
+
+### Running All Checks
+
+```bash
+make all  # install + test + smoke
+```

@@ -15,3 +15,23 @@ schedules:
   - name: daily-tick
     cron: "0 0 * * *"
     event: timer.tick.daily
+
+# External adapter events (fswatch, git hooks) — declared here for static
+# validation only; no cron is needed, they are emitted by external processes.
+  - name: external-file-created
+    event: file.created
+
+  - name: external-file-modified
+    event: file.modified
+
+  - name: external-git-push
+    event: git.push
+
+  - name: external-git-commit
+    event: git.commit
+
+  - name: external-landings-updated
+    event: landings.updated
+
+  - name: external-boi-iteration-done
+    event: boi.iteration.done

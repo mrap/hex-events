@@ -1,0 +1,18 @@
+# hex-events install smoke test
+# Usage: docker build -t hex-events-test -f tests/Dockerfile.install .
+#        docker run --rm hex-events-test
+FROM python:3.12-slim
+
+# Skip macOS LaunchAgent/launchctl setup in Docker
+ENV HEX_EVENTS_NO_LAUNCHCTL=1
+
+WORKDIR /app
+
+# Copy entire repo into container
+COPY . /app/
+
+# Run the install script
+RUN bash install.sh
+
+# smoke_test.sh is already present inside /app/tests/ after the COPY above
+CMD ["bash", "tests/smoke_test.sh"]
