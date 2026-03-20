@@ -2,7 +2,9 @@ name: boi-completion-gate
 description: >
   Enforces clean, tested, pushed code before a BOI spec is truly done.
   Triggers on boi.spec.completed, runs verify-boi-completion.sh, and
-  emits boi.completion.verified on success or policy.violation on failure.
+  emits boi.completion.verified on success. On first verify failure,
+  runs auto-commit to remediate, then re-verifies before emitting
+  policy.violation.
 standing_orders:
   - "6"
   - "12"
@@ -12,6 +14,7 @@ reflection_ids:
 provides:
   events:
     - boi.completion.verified
+    - boi.completion.retry-verify
     - policy.violation
 requires:
   events:
@@ -20,6 +23,33 @@ rules:
   - name: verify-on-spec-completed
     trigger:
       event: boi.spec.completed
+    actions:
+      - type: shell
+        command: >
+          bash ~/.hex-events/scripts/verify-boi-completion.sh
+          "{{ event.spec_id }}"
+          "{{ event.target_repo }}"
+        on_success:
+          - type: emit
+            event: boi.completion.verified
+            payload:
+              spec_id: "{{ event.spec_id }}"
+              target_repo: "{{ event.target_repo }}"
+        on_failure:
+          - type: shell
+            command: >
+              bash ~/.hex-events/scripts/auto-commit-boi-output.sh
+              "{{ event.spec_id }}"
+              "{{ event.target_repo }}"
+          - type: emit
+            event: boi.completion.retry-verify
+            payload:
+              spec_id: "{{ event.spec_id }}"
+              target_repo: "{{ event.target_repo }}"
+
+  - name: retry-verify-after-auto-commit
+    trigger:
+      event: boi.completion.retry-verify
     actions:
       - type: shell
         command: >

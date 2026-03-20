@@ -16,6 +16,14 @@ schedules:
     cron: "0 0 * * *"
     event: timer.tick.daily
 
+  - name: 4h-tick
+    cron: "0 */4 * * *"
+    event: timer.tick.4h
+
+  - name: daily-9am-tick
+    cron: "0 9 * * *"
+    event: timer.tick.daily.9am
+
 # External adapter events (fswatch, git hooks) — declared here for static
 # validation only; no cron is needed, they are emitted by external processes.
   - name: external-file-created
@@ -35,3 +43,6 @@ schedules:
 
   - name: external-boi-iteration-done
     event: boi.iteration.done
+
+  - name: external-boi-spec-completed
+    event: boi.spec.completed

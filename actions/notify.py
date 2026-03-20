@@ -15,6 +15,9 @@ class NotifyAction:
                 ["bash", os.path.expanduser("~/.claude/scripts/hex-notify.sh"), message],
                 capture_output=True, text=True, timeout=30,
             )
-            return {"status": "success" if result.returncode == 0 else "error", "output": result.stdout.strip()}
+            if result.returncode == 0:
+                return {"status": "success", "output": result.stdout.strip()}
+            error_out = result.stderr.strip() or result.stdout.strip() or f"exit code {result.returncode}"
+            return {"status": "error", "output": error_out}
         except Exception as e:
             return {"status": "error", "output": str(e)}

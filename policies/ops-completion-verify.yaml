@@ -1,0 +1,66 @@
+name: ops-completion-verify
+description: >
+  Checks that expected output files exist after a BOI spec completes.
+  Reads the spec file, extracts 'test -f <path>' patterns from Verify sections,
+  and confirms those files exist. Emits ops.spec.verified on success or
+  ops.spec.output-missing on failure.
+provides:
+  events:
+    - ops.spec.verified
+    - ops.spec.output-missing
+requires:
+  events:
+    - boi.spec.completed
+rate_limit:
+  max_fires: 30
+  window: 1h
+rules:
+  - name: verify-output-files-on-completion
+    trigger:
+      event: boi.spec.completed
+    actions:
+      - type: shell
+        command: |
+          python3 -c "
+          import re, os, sys
+
+          spec_path = '{{ event.spec_path }}'
+          queue_id = '{{ event.queue_id }}'
+
+          if not spec_path or not os.path.exists(spec_path):
+              print(f'spec_path not found: {spec_path}', file=sys.stderr)
+              sys.exit(0)
+
+          with open(spec_path) as f:
+              content = f.read()
+
+          # Find all 'test -f <path>' patterns in Verify sections
+          paths = re.findall(r'test\s+-f\s+([^\s\)\'\"]+)', content)
+          paths = [os.path.expanduser(p) for p in paths]
+
+          if not paths:
+              print('No test -f paths found in spec, skipping verify')
+              sys.exit(0)
+
+          missing = [p for p in paths if not os.path.exists(p)]
+          if missing:
+              print('MISSING: ' + ', '.join(missing), file=sys.stderr)
+              sys.exit(1)
+
+          print('All output files verified: ' + ', '.join(paths))
+          "
+        on_success:
+          - type: emit
+            event: ops.spec.verified
+            payload:
+              queue_id: "{{ event.queue_id }}"
+              spec_path: "{{ event.spec_path }}"
+        on_failure:
+          - type: emit
+            event: ops.spec.output-missing
+            payload:
+              queue_id: "{{ event.queue_id }}"
+              spec_path: "{{ event.spec_path }}"
+              message: "{{ action.stderr }}"
+          - type: notify
+            message: "BOI spec {{ event.queue_id }} output files missing after completion"

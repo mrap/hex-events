@@ -196,6 +196,53 @@ def test_iteration_done_zero_tasks_no_deferred_check():
 # Test 5: Multiple iterations — cancel_group debounces
 # ---------------------------------------------------------------------------
 
+def test_check_rule_fires_with_no_output_paths():
+    """boi.output.check-due with no output_paths field should not crash or emit violation."""
+    db, path = make_db()
+    try:
+        policy = load_boi_policy()
+        rules = policy.rules
+
+        # Event with no output_paths field at all
+        payload = json.dumps({"spec_id": "q-138"})
+        db.insert_event("boi.output.check-due", payload, "test")
+        event = db.get_unprocessed()[0]
+
+        # Should not raise; empty output_paths → no missing files → no violation
+        process_event(event, rules, db)
+
+        # No policy.violation events should be emitted
+        new_events = db.conn.execute(
+            "SELECT * FROM events WHERE event_type = 'policy.violation'"
+        ).fetchall()
+        assert len(new_events) == 0, "No violation when output_paths is absent"
+    finally:
+        db.close()
+        os.unlink(path)
+
+
+def test_check_rule_fires_with_null_output_paths():
+    """boi.output.check-due with explicit null output_paths should not crash."""
+    db, path = make_db()
+    try:
+        policy = load_boi_policy()
+        rules = policy.rules
+
+        payload = json.dumps({"spec_id": "q-138", "output_paths": None})
+        db.insert_event("boi.output.check-due", payload, "test")
+        event = db.get_unprocessed()[0]
+
+        process_event(event, rules, db)
+
+        new_events = db.conn.execute(
+            "SELECT * FROM events WHERE event_type = 'policy.violation'"
+        ).fetchall()
+        assert len(new_events) == 0, "No violation when output_paths is null"
+    finally:
+        db.close()
+        os.unlink(path)
+
+
 def test_multiple_iterations_cancel_group_deduplicated():
     """Multiple boi.iteration.done events for the same spec → last wins."""
     db, path = make_db()

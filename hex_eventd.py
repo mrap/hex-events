@@ -2,6 +2,7 @@
 """hex-eventd — persistent daemon for hex-events."""
 import json
 import logging
+import logging.handlers
 import os
 import signal
 import sys
@@ -12,20 +13,22 @@ from pathlib import Path
 # Add parent to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from db import EventsDB
+from db import EventsDB, parse_duration
 from recipe import Recipe
 from policy import load_policies, check_rate_limit, record_fire
-from conditions import evaluate_conditions
+from conditions import evaluate_conditions, evaluate_conditions_with_details
 from actions import get_action_handler
 from adapters.scheduler import SchedulerAdapter
 
 BASE_DIR = os.path.expanduser("~/.hex-events")
 DB_PATH = os.path.join(BASE_DIR, "events.db")
+LOG_FILE = os.path.join(BASE_DIR, "daemon.log")
 POLICIES_DIR = os.path.join(BASE_DIR, "policies")
 SCHEDULER_CONFIG = os.path.join(BASE_DIR, "adapters", "scheduler.yaml")
 POLL_INTERVAL = 2  # seconds
 JANITOR_INTERVAL = 3600  # run janitor every hour
 SCHEDULER_RELOAD_INTERVAL = 60  # reload scheduler config every minute
+HEARTBEAT_INTERVAL = 300  # heartbeat log every 5 minutes
 
 log = logging.getLogger("hex-events")
 
@@ -41,8 +44,8 @@ def drain_deferred(db: EventsDB):
         db.insert_event(row["event_type"], row["payload"], row["source"])
 
 
-def match_recipes(recipes: list[Recipe], event_type: str) -> list[Recipe]:
-    return [r for r in recipes if r.matches_event_type(event_type)]
+def match_policies(policies: list[Recipe], event_type: str) -> list[Recipe]:
+    return [r for r in policies if r.matches_event_type(event_type)]
 
 
 def run_action_with_retry(action, event_id: int, recipe_name: str, payload: dict,
@@ -85,21 +88,23 @@ def run_action_with_retry(action, event_id: int, recipe_name: str, payload: dict
         # Action failed
         if attempt < max_retries:
             retry_label = f"retry_{attempt + 1}"
+            err_detail = (result.get("output") or "")[:500]
             db.log_action(event_id, recipe_name, action.type,
                           json.dumps(action.params), retry_label,
-                          f"Retry {attempt + 1}/{max_retries}: {result.get('output', '')}")
+                          f"Retry {attempt + 1}/{max_retries}: {err_detail}")
             sleep_fn(backoff)
             backoff *= 2
         else:
             # Final failure after all retries exhausted
+            err_detail = (result.get("output") or "")[:500]
             db.log_action(event_id, recipe_name, action.type,
                           json.dumps(action.params), "error",
-                          f"Permanently failed after {max_retries} retries: {result.get('output', '')}")
+                          f"Permanently failed after {max_retries} retries: {err_detail}")
 
     return result
 
 
-def process_event(event: dict, recipes: list[Recipe], db: EventsDB):
+def process_event(event: dict, policies: list[Recipe], db: EventsDB):
     event_type = event["event_type"]
     event_id = event["id"]
     try:
@@ -109,7 +114,7 @@ def process_event(event: dict, recipes: list[Recipe], db: EventsDB):
         db.mark_processed(event_id, None)
         return
 
-    matched = match_recipes(recipes, event_type)
+    matched = match_policies(policies, event_type)
     matched_names = []
 
     for recipe in matched:
@@ -122,11 +127,13 @@ def process_event(event: dict, recipes: list[Recipe], db: EventsDB):
     recipe_column = ",".join(matched_names) if matched_names else None
     db.mark_processed(event_id, recipe_column)
 
-def _process_event_policies(event: dict, policies: list, db: "EventsDB"):
+def _process_event_policies(event: dict, policies: list, db: "EventsDB") -> int:
     """Process an event against Policy objects with per-policy rate limiting.
 
     Iterates each policy, checks its rate limit, then evaluates matching rules.
     Records a fire timestamp per policy only when at least one rule fires.
+
+    Returns the number of actions dispatched.
     """
     event_type = event["event_type"]
     event_id = event["id"]
@@ -138,33 +145,102 @@ def _process_event_policies(event: dict, policies: list, db: "EventsDB"):
         return
 
     matched_names = []
+    eval_rows = []
+    now_ts = datetime.utcnow().isoformat()
+    actions_dispatched = 0
+
     for policy in policies:
         matching_rules = [r for r in policy.rules if r.matches_event_type(event_type)]
         if not matching_rules:
             continue
         if not check_rate_limit(policy):
-            log.info("Rate limited: policy %s skipped for event %s", policy.name, event_type)
+            rl = policy.rate_limit or {}
+            max_fires = rl.get("max_fires", 0)
+            window_str = str(rl.get("window", "1h"))
+            window_secs = parse_duration(window_str)
+            cutoff = time.time() - window_secs
+            fires_in_window = len([t for t in policy.last_fires if t >= cutoff])
+            rule_names = ",".join(r.name for r in matching_rules)
+            detail = json.dumps({
+                "policy": policy.name,
+                "rule": rule_names,
+                "fires_in_window": fires_in_window,
+                "max_fires": max_fires,
+                "window": window_str,
+            })
+            err_msg = f"Rate limited: {fires_in_window}/{max_fires} fires in {window_str}"
+            log.warning("Rate limited: policy %s skipped for event %s (%d/%d fires in %s)",
+                        policy.name, event_type, fires_in_window, max_fires, window_str)
+            db.log_action(event_id, policy.name, "rate_limited", detail, "suppressed", err_msg)
+            for rule in matching_rules:
+                eval_rows.append({
+                    "event_id": event_id,
+                    "policy_name": policy.name,
+                    "rule_name": rule.name,
+                    "matched": 1,
+                    "conditions_passed": None,
+                    "condition_details": None,
+                    "rate_limited": 1,
+                    "action_taken": 0,
+                    "evaluated_at": now_ts,
+                })
             continue
         fired = False
         for rule in matching_rules:
-            if not evaluate_conditions(rule.conditions, payload, db=db):
-                continue
-            matched_names.append(rule.name)
-            fired = True
-            for action in rule.actions:
-                run_action_with_retry(action, event_id, rule.name, payload, db)
+            conditions_passed, cond_details = evaluate_conditions_with_details(
+                rule.conditions, payload, db=db
+            )
+            action_taken = 0
+            if conditions_passed:
+                matched_names.append(rule.name)
+                fired = True
+                action_taken = 1
+                for action in rule.actions:
+                    run_action_with_retry(action, event_id, rule.name, payload, db)
+                    actions_dispatched += 1
+            eval_rows.append({
+                "event_id": event_id,
+                "policy_name": policy.name,
+                "rule_name": rule.name,
+                "matched": 1,
+                "conditions_passed": 1 if conditions_passed else 0,
+                "condition_details": json.dumps(cond_details) if cond_details else None,
+                "rate_limited": 0,
+                "action_taken": action_taken,
+                "evaluated_at": now_ts,
+            })
         if fired:
             record_fire(policy)
 
+    if eval_rows:
+        try:
+            db.log_policy_evals(eval_rows)
+        except Exception as e:
+            log.error("Failed to log policy evals for event %s: %s", event_id, e)
+
     recipe_column = ",".join(matched_names) if matched_names else None
     db.mark_processed(event_id, recipe_column)
+    return actions_dispatched
+
+
+def _setup_logging():
+    """Configure logging to write directly to daemon.log via RotatingFileHandler.
+
+    This works regardless of how the daemon is launched (launchd or manual).
+    """
+    os.makedirs(BASE_DIR, exist_ok=True)
+    fmt = logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s")
+    fh = logging.handlers.RotatingFileHandler(
+        LOG_FILE, maxBytes=5 * 1024 * 1024, backupCount=3
+    )
+    fh.setFormatter(fmt)
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    root.addHandler(fh)
 
 
 def run_daemon():
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(name)s %(levelname)s %(message)s",
-    )
+    _setup_logging()
     log.info("hex-eventd starting (pid=%d)", os.getpid())
 
     db = EventsDB(DB_PATH)
@@ -189,6 +265,9 @@ def run_daemon():
     last_janitor = 0
     last_recipe_load = 0
     last_scheduler_reload = 0
+    last_heartbeat = time.time()
+    _hb_events = 0
+    _hb_actions = 0
     _policies = []
 
     while running:
@@ -219,10 +298,21 @@ def run_daemon():
         # Process unprocessed events
         try:
             events = db.get_unprocessed()
+            _hb_events += len(events)
             for event in events:
-                _process_event_policies(event, _policies, db)
+                _hb_actions += _process_event_policies(event, _policies, db)
         except Exception as e:
             log.error("Error processing events: %s", e)
+
+        # Heartbeat
+        if now - last_heartbeat >= HEARTBEAT_INTERVAL:
+            log.debug(
+                "heartbeat: %d events processed, %d actions fired since last heartbeat",
+                _hb_events, _hb_actions,
+            )
+            _hb_events = 0
+            _hb_actions = 0
+            last_heartbeat = now
 
         # Janitor
         if now - last_janitor > JANITOR_INTERVAL:

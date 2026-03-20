@@ -68,18 +68,35 @@ def make_clean_repo(tmp_dir, remote_path):
 
 
 def make_dirty_repo(tmp_dir):
-    """Create a git repo with uncommitted changes."""
+    """Create a git repo with uncommitted changes whose remote becomes unreachable.
+
+    Flow: initial commit is pushed to a bare remote, then the remote URL is
+    changed to a non-existent path. This means:
+    - auto-commit-boi-output.sh commits the dirty file but cannot push
+    - verify-boi-completion.sh on retry detects unpushed commits (origin/HEAD
+      exists from the initial push, new commit is not there) → FAIL → violation
+
+    Returns (repo_path, bare_remote_path) so callers can restore the remote.
+    """
+    remote = make_bare_remote(tmp_dir)
     repo = os.path.join(tmp_dir, "dirty_repo")
     os.makedirs(repo)
     subprocess.run(["git", "init", repo], check=True, capture_output=True)
     subprocess.run(["git", "-C", repo, "config", "user.email", "test@test.com"], check=True, capture_output=True)
     subprocess.run(["git", "-C", repo, "config", "user.name", "Test"], check=True, capture_output=True)
-    # Add a committed file
     f = os.path.join(repo, "README.md")
     with open(f, "w") as fh:
         fh.write("original\n")
     subprocess.run(["git", "-C", repo, "add", "."], check=True, capture_output=True)
     subprocess.run(["git", "-C", repo, "commit", "-m", "init"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", repo, "remote", "add", "origin", remote], check=True, capture_output=True)
+    subprocess.run(["git", "-C", repo, "push", "-u", "origin", "HEAD"], check=True, capture_output=True)
+    # Explicitly set origin/HEAD so verify-boi-completion.sh can detect unpushed commits
+    subprocess.run(["git", "-C", repo, "remote", "set-head", "origin", "main"], capture_output=True)
+    subprocess.run(["git", "-C", repo, "remote", "set-head", "origin", "master"], capture_output=True)
+    # Break the remote URL so future pushes fail but origin/HEAD still exists
+    broken_remote = os.path.join(tmp_dir, "nonexistent_remote.git")
+    subprocess.run(["git", "-C", repo, "remote", "set-url", "origin", broken_remote], check=True, capture_output=True)
     # Now dirty: untracked file
     dirty = os.path.join(repo, "dirty.txt")
     with open(dirty, "w") as fh:
@@ -94,7 +111,7 @@ def make_dirty_repo(tmp_dir):
 def test_policy_loads():
     policy = load_gate_policy()
     assert policy.name == "boi-completion-gate"
-    assert len(policy.rules) == 1
+    assert len(policy.rules) == 2
 
 
 def test_policy_metadata():
@@ -157,14 +174,27 @@ def test_on_success_emits_verified():
 
 
 def test_on_failure_emits_violation():
+    # The policy now uses a two-step retry: first attempt triggers auto-commit
+    # and re-verification; only the retry rule emits policy.violation.
     policy = load_gate_policy()
-    rule = policy.rules[0]
-    action = rule.actions[0]
+    # First rule: on_failure triggers auto-commit + retry-verify (2 actions)
+    first_rule = policy.rules[0]
+    action = first_rule.actions[0]
     on_failure = action.params["on_failure"]
-    assert len(on_failure) == 1
-    assert on_failure[0]["type"] == "emit"
-    assert on_failure[0]["event"] == "policy.violation"
-    assert on_failure[0]["payload"]["policy"] == "boi-completion-gate"
+    assert len(on_failure) == 2
+    action_types = [a["type"] for a in on_failure]
+    assert "shell" in action_types
+    assert "emit" in action_types
+    retry_emit = next(a for a in on_failure if a["type"] == "emit")
+    assert retry_emit["event"] == "boi.completion.retry-verify"
+    # Second rule: on_failure emits policy.violation
+    retry_rule = policy.rules[1]
+    retry_action = retry_rule.actions[0]
+    retry_on_failure = retry_action.params["on_failure"]
+    assert len(retry_on_failure) == 1
+    assert retry_on_failure[0]["type"] == "emit"
+    assert retry_on_failure[0]["event"] == "policy.violation"
+    assert retry_on_failure[0]["payload"]["policy"] == "boi-completion-gate"
 
 
 # ---------------------------------------------------------------------------
@@ -225,12 +255,19 @@ def _count_events(db: "EventsDB", event_type: str) -> int:
 
 
 def _emit_and_process(db: "EventsDB", policies: list,
-                      event_type: str, payload: dict) -> None:
-    """Insert an event into the DB and run one daemon tick."""
-    eid = db.insert_event(event_type, json.dumps(payload), "test")
-    events = db.get_unprocessed()
-    for event in events:
-        _process_event_policies(event, policies, db)
+                      event_type: str, payload: dict, max_ticks: int = 5) -> None:
+    """Insert an event into the DB and run daemon ticks until no unprocessed events remain.
+
+    Multi-tick processing is needed for policies with retry steps that emit follow-up events
+    (e.g. boi.completion.retry-verify) that must be processed in subsequent ticks.
+    """
+    db.insert_event(event_type, json.dumps(payload), "test")
+    for _ in range(max_ticks):
+        events = db.get_unprocessed()
+        if not events:
+            break
+        for event in events:
+            _process_event_policies(event, policies, db)
 
 
 def test_integration_pipeline_dirty_repo_emits_violation():
@@ -310,17 +347,12 @@ def test_integration_pipeline_dirty_then_clean():
         })
         assert _count_events(db, "policy.violation") >= 1
 
-        # Step 2: clean up the repo — commit the dirty file, add a bare remote, push
+        # Step 2: restore the bare remote (auto-commit already committed dirty files)
+        # make_dirty_repo created a bare remote at tmp/remote.git but then broke the URL.
+        # Restore the original remote URL and push the auto-committed changes.
+        real_remote = os.path.join(tmp, "remote.git")
         subprocess.run(
-            ["git", "-C", repo, "add", "."], check=True, capture_output=True
-        )
-        subprocess.run(
-            ["git", "-C", repo, "commit", "-m", "fix: commit dirty files"],
-            check=True, capture_output=True
-        )
-        remote = make_bare_remote(tmp)
-        subprocess.run(
-            ["git", "-C", repo, "remote", "add", "origin", remote],
+            ["git", "-C", repo, "remote", "set-url", "origin", real_remote],
             check=True, capture_output=True
         )
         subprocess.run(

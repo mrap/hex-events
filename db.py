@@ -39,6 +39,20 @@ CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type);
 CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at);
 CREATE INDEX IF NOT EXISTS idx_events_dedup ON events(dedup_key) WHERE dedup_key IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_deferred_fire_at ON deferred_events(fire_at);
+CREATE TABLE IF NOT EXISTS policy_eval_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id INTEGER NOT NULL REFERENCES events(id),
+    policy_name TEXT NOT NULL,
+    rule_name TEXT NOT NULL,
+    matched BOOLEAN NOT NULL,
+    conditions_passed BOOLEAN,
+    condition_details TEXT,
+    rate_limited BOOLEAN DEFAULT 0,
+    action_taken BOOLEAN DEFAULT 0,
+    evaluated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_policy_eval_event ON policy_eval_log(event_id);
+CREATE INDEX IF NOT EXISTS idx_policy_eval_policy ON policy_eval_log(policy_name);
 """
 
 
@@ -137,6 +151,18 @@ class EventsDB:
         ).fetchall()
         return [dict(r) for r in rows]
 
+    def get_rate_limited_by_event(self, event_ids: list[int]) -> dict[int, str]:
+        """Return {event_id: policy_name} for events with rate_limited action_log entries."""
+        if not event_ids:
+            return {}
+        placeholders = ",".join("?" * len(event_ids))
+        rows = self.conn.execute(
+            f"SELECT event_id, recipe FROM action_log WHERE action_type = 'rate_limited' "
+            f"AND event_id IN ({placeholders})",
+            event_ids,
+        ).fetchall()
+        return {r["event_id"]: r["recipe"] for r in rows}
+
     def count_events(self, event_type: str, seconds: int | None = None,
                      hours: int | None = None) -> int:
         """Count events of event_type within a time window.
@@ -211,3 +237,60 @@ class EventsDB:
         """Delete a deferred event by id (dual-write safety: delete before promoting)."""
         self.conn.execute("DELETE FROM deferred_events WHERE id = ?", (row_id,))
         self.conn.commit()
+
+    # -----------------------------------------------------------------------
+    # Policy evaluation log
+    # -----------------------------------------------------------------------
+
+    def log_policy_evals(self, rows: list[dict]):
+        """Batch insert policy evaluation log entries."""
+        if not rows:
+            return
+        now = datetime.utcnow().isoformat()
+        self.conn.executemany(
+            "INSERT INTO policy_eval_log "
+            "(event_id, policy_name, rule_name, matched, conditions_passed, "
+            "condition_details, rate_limited, action_taken, evaluated_at) "
+            "VALUES (:event_id, :policy_name, :rule_name, :matched, :conditions_passed, "
+            ":condition_details, :rate_limited, :action_taken, :evaluated_at)",
+            [
+                {
+                    "event_id": r["event_id"],
+                    "policy_name": r["policy_name"],
+                    "rule_name": r["rule_name"],
+                    "matched": r["matched"],
+                    "conditions_passed": r.get("conditions_passed"),
+                    "condition_details": r.get("condition_details"),
+                    "rate_limited": r.get("rate_limited", 0),
+                    "action_taken": r.get("action_taken", 0),
+                    "evaluated_at": r.get("evaluated_at", now),
+                }
+                for r in rows
+            ],
+        )
+        self.conn.commit()
+
+    def get_policy_evals(self, event_id: int, policy_name: str | None = None) -> list[dict]:
+        """Return policy eval log entries for an event, optionally filtered by policy name."""
+        if policy_name:
+            rows = self.conn.execute(
+                "SELECT * FROM policy_eval_log WHERE event_id = ? AND policy_name = ? ORDER BY id",
+                (event_id, policy_name),
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                "SELECT * FROM policy_eval_log WHERE event_id = ? ORDER BY id",
+                (event_id,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_policy_evals_since(self, policy_name: str, since_hours: int) -> list[dict]:
+        """Return policy eval log entries for a policy within the last N hours."""
+        rows = self.conn.execute(
+            "SELECT pel.*, e.event_type, e.created_at as event_created_at "
+            "FROM policy_eval_log pel JOIN events e ON e.id = pel.event_id "
+            "WHERE pel.policy_name = ? AND pel.evaluated_at >= datetime('now', ?) "
+            "ORDER BY pel.id DESC",
+            (policy_name, f"-{since_hours} hours"),
+        ).fetchall()
+        return [dict(r) for r in rows]

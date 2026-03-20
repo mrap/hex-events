@@ -39,10 +39,10 @@ rules:
       event: boi.output.check-due
     actions:
       - type: shell
-        command: >
+        command: |
           python3 -c "
           import json, sys, os
-          output_paths = json.loads('{{ event.output_paths | tojson }}') if '{{ event.output_paths }}' else []
+          output_paths = json.loads('{{ event.output_paths | default(none) | tojson }}') or []
           missing = [p for p in output_paths if not os.path.exists(os.path.expanduser(p))]
           if missing:
               sys.exit(1)
