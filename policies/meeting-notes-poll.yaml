@@ -1,0 +1,22 @@
+name: meeting-notes-poll
+description: >
+  Polls calendar and Google Drive for new or updated AI meeting notes every 15 minutes.
+  Emits meeting.notes.detected events for each doc found. Dedup is handled by the
+  poll script via dedup_key so unchanged docs are silently skipped.
+provides:
+  events:
+    - meeting.notes.detected
+requires:
+  events:
+    - timer.tick.15m
+rate_limit:
+  max_fires: 6
+  window: 1h
+rules:
+  - name: poll-for-meeting-notes
+    trigger:
+      event: timer.tick.15m
+    actions:
+      - type: shell
+        command: python3 ~/.hex-events/scripts/poll-meeting-notes.py
+        timeout: 60
