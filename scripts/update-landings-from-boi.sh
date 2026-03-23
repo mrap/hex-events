@@ -23,16 +23,17 @@ if [[ -z "$SPEC_TITLE" ]]; then
 fi
 
 # Get today's date
-TODAY=$(bash ~/mrap-hex/.claude/scripts/today.sh)
+HEX_HOME="${HEX_HOME:-$HOME/mrap-hex}"
+TODAY=$(bash "${HEX_HOME}/.claude/scripts/today.sh")
 if [[ -z "$TODAY" ]]; then
-    echo "ERROR: today.sh returned empty string — is ~/mrap-hex/.claude/scripts/today.sh present and executable?" >&2
+    echo "ERROR: today.sh returned empty string — is ${HEX_HOME}/.claude/scripts/today.sh present and executable?" >&2
     exit 1
 fi
 if [[ ! "$TODAY" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
     echo "ERROR: today.sh returned '${TODAY}' which does not match YYYY-MM-DD format" >&2
     exit 1
 fi
-LANDINGS_FILE="$HOME/mrap-hex/landings/${TODAY}.md"
+LANDINGS_FILE="${HEX_HOME}/landings/${TODAY}.md"
 OPS_LOG="$HOME/.boi/ops-actions.log"
 
 # If landings file doesn't exist, exit cleanly

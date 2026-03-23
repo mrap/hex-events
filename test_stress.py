@@ -764,7 +764,7 @@ def test_janitor():
 # t-8: End-to-end: git commit triggers full pipeline
 # ---------------------------------------------------------------------------
 
-HEX_REPO = os.path.realpath("/Users/mrap/hex")  # resolve symlinks
+HEX_REPO = os.path.realpath(os.path.expanduser(os.environ.get("HEX_REPO", "~/hex")))  # resolve symlinks
 E2E_TEST_FILE = os.path.join(HEX_REPO, "raw", "captures", "stress-test-e2e-temp.md")
 E2E_COMMIT_MSG = "stress-test: e2e commit"
 # Per-repo hook (may be overridden by global core.hooksPath)

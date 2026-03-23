@@ -131,7 +131,7 @@ trigger:
 actions:
   - type: shell
     command: >
-      cd /Users/mrap/hex &&
+      cd ~ &&
       LAST_COMMIT=$(git log -1 --format='%h %s') &&
       LANDINGS=$(ls landings/ | sort | tail -1) &&
       echo "- $(date +%H:%M) — Git push: $LAST_COMMIT" >> "landings/$LANDINGS"
@@ -155,7 +155,7 @@ rules:
     actions:
       - type: shell
         command: >
-          cd /Users/mrap/hex &&
+          cd ~ &&
           LAST_COMMIT=$(git log -1 --format='%h %s') &&
           LANDINGS=$(ls landings/ | sort | tail -1) &&
           echo "- $(date +%H:%M) — Git push: $LAST_COMMIT" >> "landings/$LANDINGS"
@@ -176,7 +176,7 @@ conditions:
     value: raw/captures/
 actions:
   - type: shell
-    command: 'echo "New capture: {{ event.path }}" >> /Users/mrap/.hex-events/daemon.log'
+    command: 'echo "New capture: {{ event.path }}" >> ~/.hex-events/daemon.log'
 ```
 
 **Converted (`policies/file-triage.yaml`):**
@@ -200,7 +200,7 @@ rules:
         value: raw/captures/
     actions:
       - type: shell
-        command: 'echo "New capture: {{ event.path }}" >> /Users/mrap/.hex-events/daemon.log'
+        command: 'echo "New capture: {{ event.path }}" >> ~/.hex-events/daemon.log'
 ```
 
 ---
@@ -218,7 +218,7 @@ conditions:
     value: landings/
 actions:
   - type: shell
-    command: bash /Users/mrap/hex/.claude/scripts/landings-dashboard.sh --refresh 2>/dev/null || true
+    command: bash ~/.claude/scripts/landings-dashboard.sh --refresh 2>/dev/null || true
 ```
 
 **Converted (`policies/landing-refresh.yaml`):**
@@ -242,7 +242,7 @@ rules:
         value: landings/
     actions:
       - type: shell
-        command: bash /Users/mrap/hex/.claude/scripts/landings-dashboard.sh --refresh 2>/dev/null || true
+        command: bash ~/.claude/scripts/landings-dashboard.sh --refresh 2>/dev/null || true
 ```
 
 ---

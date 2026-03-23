@@ -20,7 +20,7 @@ rules:
     conditions: []
     actions:
       - type: shell
-        command: "cd ~/github.com/mrap/polymarket-trader && bash scripts/scan.sh"
+        command: "cd ${POLYMARKET_DIR:-~/github.com/mrap/polymarket-trader} && bash scripts/scan.sh"
         timeout: 120
         retries: 2
       - type: emit
@@ -32,7 +32,7 @@ rules:
     conditions: []
     actions:
       - type: shell
-        command: "cd ~/github.com/mrap/polymarket-trader && bash scripts/report.sh"
+        command: "cd ${POLYMARKET_DIR:-~/github.com/mrap/polymarket-trader} && bash scripts/report.sh"
         retries: 1
       - type: emit
         event: polymarket.report.completed
@@ -43,4 +43,4 @@ rules:
     conditions: []
     actions:
       - type: shell
-        command: "pgrep -f 'flask run.*5151' || (cd ~/github.com/mrap/polymarket-trader && nohup bash scripts/dashboard.sh > data/dashboard.log 2>&1 &)"
+        command: "pgrep -f 'flask run.*5151' || (cd ${POLYMARKET_DIR:-~/github.com/mrap/polymarket-trader} && nohup bash scripts/dashboard.sh > data/dashboard.log 2>&1 &)"
