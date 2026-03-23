@@ -24,7 +24,7 @@ rules:
         command: >
           bash ~/.hex-events/scripts/update-landings-from-boi.sh
           dispatched
-          "{{ event.queue_id }}"
+          "{{ event.spec_id or event.queue_id }}"
           "{{ event.spec_title }}"
           "0"
           "{{ event.tasks_total }}"
@@ -40,7 +40,7 @@ rules:
         command: >
           bash ~/.hex-events/scripts/update-landings-from-boi.sh
           completed
-          "{{ event.queue_id }}"
+          "{{ event.spec_id or event.queue_id }}"
           "{{ event.spec_title }}"
           "{{ event.tasks_done }}"
           "{{ event.tasks_total }}"
@@ -56,7 +56,7 @@ rules:
         command: >
           bash ~/.hex-events/scripts/update-landings-from-boi.sh
           failed
-          "{{ event.queue_id }}"
+          "{{ event.spec_id or event.queue_id }}"
           "{{ event.spec_title }}"
           "{{ event.tasks_done }}"
           "{{ event.tasks_total }}"

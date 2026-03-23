@@ -37,12 +37,13 @@ class ShellAction:
 
     def run(self, params: dict, event_payload: dict, db=None) -> dict:
         command = params["command"]
+        timeout = int(params.get("timeout", 60))
         # Render Jinja2 templates in command
         if "{{" in command:
             command = Template(command).render(event=event_payload)
         try:
             result = subprocess.run(
-                command, shell=True, capture_output=True, text=True, timeout=60,
+                command, shell=True, capture_output=True, text=True, timeout=timeout,
             )
             if result.returncode == 0:
                 action_result = {"stdout": result.stdout.strip(), "returncode": 0}
@@ -58,4 +59,4 @@ class ShellAction:
                 return {"status": "error", "output": error_output,
                         "code": result.returncode}
         except subprocess.TimeoutExpired:
-            return {"status": "error", "output": "timeout after 60s"}
+            return {"status": "error", "output": f"timeout after {timeout}s"}

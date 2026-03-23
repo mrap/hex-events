@@ -21,6 +21,7 @@ rules:
     actions:
       - type: shell
         command: "cd ~/github.com/mrap/polymarket-trader && bash scripts/scan.sh"
+        timeout: 120
         retries: 2
       - type: emit
         event: polymarket.scan.completed

@@ -10,9 +10,16 @@ SPEC_TITLE="${3:-}"
 TASKS_DONE="${4:-0}"
 TASKS_TOTAL="${5:-0}"
 
-if [[ -z "$EVENT_TYPE" || -z "$SPEC_ID" || -z "$SPEC_TITLE" ]]; then
+if [[ -z "$EVENT_TYPE" ]]; then
     echo "Usage: $0 <event_type> <spec_id> <spec_title> <tasks_done> <tasks_total>" >&2
     exit 1
+fi
+# spec_id and spec_title may be absent from older event payloads; use fallbacks
+if [[ -z "$SPEC_ID" ]]; then
+    SPEC_ID="unknown"
+fi
+if [[ -z "$SPEC_TITLE" ]]; then
+    SPEC_TITLE="Unknown"
 fi
 
 # Get today's date
