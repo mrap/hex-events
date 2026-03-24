@@ -34,14 +34,14 @@ def cmd_status(args):
     running = result.returncode == 0
     pid = result.stdout.strip().split("\n")[0] if running else None
 
-    recipes = load_recipes(RECIPES_DIR) if os.path.isdir(RECIPES_DIR) else []
+    policies, _ = _load_all_policies()
     db = EventsDB(DB_PATH)
     unprocessed = len(db.get_unprocessed())
     total = len(db.history(limit=1000))
     db.close()
 
     print(f"Daemon:      {'running (pid {})'.format(pid) if running else 'NOT RUNNING'}")
-    print(f"Recipes:     {len(recipes)} loaded")
+    print(f"Policies:    {len(policies)} loaded")
     print(f"Unprocessed: {unprocessed} events")
     print(f"Total (7d):  {total} events")
 
@@ -544,7 +544,11 @@ def _load_all_policies():
     policies_dir = POLICIES_DIR if os.path.isdir(POLICIES_DIR) else RECIPES_DIR
     if not os.path.isdir(policies_dir):
         return [], policies_dir
-    return load_policies(policies_dir), policies_dir
+    try:
+        return load_policies(policies_dir), policies_dir
+    except Exception as e:
+        print(f"Warning: failed to load policies from {policies_dir}: {e}", file=sys.stderr)
+        return [], policies_dir
 
 
 def cmd_validate(args):
