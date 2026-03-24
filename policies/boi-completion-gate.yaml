@@ -1,10 +1,10 @@
 name: boi-completion-gate
 description: >
-  Enforces clean, tested, pushed code before a BOI spec is truly done.
-  Triggers on boi.spec.completed, runs verify-boi-completion.sh, and
-  emits boi.completion.verified on success. On first verify failure,
-  runs auto-commit to remediate, then re-verifies before emitting
-  policy.violation.
+  Verifies BOI spec output after auto-commit. Triggers on boi.output.committed
+  (not boi.spec.completed — auto-commit policy handles commit first).
+  Runs verify script (tests, push status). Emits boi.completion.verified on
+  success, policy.violation on failure. Does NOT auto-commit — that's
+  boi-auto-commit's job.
 standing_orders:
   - "6"
   - "12"
@@ -14,42 +14,14 @@ reflection_ids:
 provides:
   events:
     - boi.completion.verified
-    - boi.completion.retry-verify
     - policy.violation
 requires:
   events:
-    - boi.spec.completed
+    - boi.output.committed
 rules:
-  - name: verify-on-spec-completed
+  - name: verify-after-commit
     trigger:
-      event: boi.spec.completed
-    actions:
-      - type: shell
-        command: >
-          bash ~/.hex-events/scripts/verify-boi-completion.sh
-          "{{ event.spec_id }}"
-          "{{ event.target_repo }}"
-        on_success:
-          - type: emit
-            event: boi.completion.verified
-            payload:
-              spec_id: "{{ event.spec_id }}"
-              target_repo: "{{ event.target_repo }}"
-        on_failure:
-          - type: shell
-            command: >
-              bash ~/.hex-events/scripts/auto-commit-boi-output.sh
-              "{{ event.spec_id }}"
-              "{{ event.target_repo }}"
-          - type: emit
-            event: boi.completion.retry-verify
-            payload:
-              spec_id: "{{ event.spec_id }}"
-              target_repo: "{{ event.target_repo }}"
-
-  - name: retry-verify-after-auto-commit
-    trigger:
-      event: boi.completion.retry-verify
+      event: boi.output.committed
     actions:
       - type: shell
         command: >
@@ -68,4 +40,4 @@ rules:
             payload:
               policy: boi-completion-gate
               spec_id: "{{ event.spec_id }}"
-              message: "{{ action.stderr }}"
+              message: "Tests or push failed after commit. Code is committed but not verified."
