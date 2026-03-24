@@ -157,7 +157,7 @@ def test_shell_action_stderr_captured_in_action_log():
 
         # Handler that returns stderr-like error detail
         class _ShellErrorHandler:
-            def run(self, params, event_payload=None, db=None):
+            def run(self, params, event_payload=None, db=None, workflow_context=None):
                 return {"status": "error", "output": "deliberate test error from stderr"}
 
         action = Action(type="shell", params={"command": "exit 1", "retries": 0})
@@ -219,7 +219,7 @@ def test_notify_action_failure_captured_in_action_log():
     db, path = make_db()
     try:
         class _NotifyErrorHandler:
-            def run(self, params, event_payload=None, db=None):
+            def run(self, params, event_payload=None, db=None, workflow_context=None):
                 return {"status": "error", "output": "notify script not found: exit code 127"}
 
         event_id = db.insert_event("test.event", "{}", "test")
@@ -250,7 +250,7 @@ def test_notify_action_exception_captured_in_action_log():
     db, path = make_db()
     try:
         class _NotifyExceptionHandler:
-            def run(self, params, event_payload=None, db=None):
+            def run(self, params, event_payload=None, db=None, workflow_context=None):
                 return {"status": "error", "output": "FileNotFoundError: hex-notify.sh missing"}
 
         event_id = db.insert_event("test.event", "{}", "test")
@@ -287,7 +287,7 @@ def test_action_log_error_message_truncated_to_500():
         long_error = "x" * 1000
 
         class _LongErrorHandler:
-            def run(self, params, event_payload=None, db=None):
+            def run(self, params, event_payload=None, db=None, workflow_context=None):
                 return {"status": "error", "output": long_error}
 
         event_id = db.insert_event("test.event", "{}", "test")

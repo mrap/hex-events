@@ -663,6 +663,209 @@ def cmd_graph(args):
               f"{len(adapter_events)} adapter events")
 
 
+def _get_workflow_dirs():
+    """Return list of (dir_name, dir_path) for all subdirectories in policies/."""
+    if not os.path.isdir(POLICIES_DIR):
+        return []
+    result = []
+    for entry in sorted(os.listdir(POLICIES_DIR)):
+        entry_path = os.path.join(POLICIES_DIR, entry)
+        if os.path.isdir(entry_path):
+            result.append((entry, entry_path))
+    return result
+
+
+def _load_workflow_info(dir_name, dir_path):
+    """Load workflow metadata from a directory."""
+    import yaml
+    config_path = os.path.join(dir_path, "_config.yaml")
+    config = {}
+    if os.path.isfile(config_path):
+        try:
+            with open(config_path) as f:
+                config = yaml.safe_load(f) or {}
+        except Exception:
+            pass
+
+    name = config.get("name", dir_name)
+    description = config.get("description", "")
+    enabled = config.get("enabled", True)
+    disabled_file = os.path.exists(os.path.join(dir_path, ".disabled"))
+    is_enabled = enabled and not disabled_file
+    shared_config = config.get("config", {})
+
+    # Count policy files
+    policy_count = 0
+    policy_names = []
+    for fname in sorted(os.listdir(dir_path)):
+        if fname.startswith("_") or fname == ".disabled":
+            continue
+        if fname.endswith((".yaml", ".yml")):
+            policy_count += 1
+            policy_names.append(fname.replace(".yaml", "").replace(".yml", ""))
+
+    return {
+        "name": name,
+        "dir_name": dir_name,
+        "dir_path": dir_path,
+        "description": description,
+        "enabled": is_enabled,
+        "disabled_file": disabled_file,
+        "config_enabled": enabled,
+        "shared_config": shared_config,
+        "policy_count": policy_count,
+        "policy_names": policy_names,
+    }
+
+
+def cmd_workflows(args):
+    """List all workflows with status."""
+    workflow_dirs = _get_workflow_dirs()
+    if not workflow_dirs:
+        print("No workflows found. Create one by making a subdirectory in policies/.")
+        return
+
+    db = EventsDB(DB_PATH)
+
+    print("Workflows:")
+    for dir_name, dir_path in workflow_dirs:
+        info = _load_workflow_info(dir_name, dir_path)
+        status = "enabled" if info["enabled"] else "disabled"
+
+        # Get 24h event count for policies in this workflow
+        event_count = 0
+        last_eval = None
+        if info["policy_names"]:
+            placeholders = ",".join("?" * len(info["policy_names"]))
+            row = db.conn.execute(
+                f"SELECT COUNT(*) as cnt, MAX(evaluated_at) as last_at "
+                f"FROM policy_eval_log WHERE policy_name IN ({placeholders}) "
+                f"AND evaluated_at >= datetime('now', '-24 hours')",
+                info["policy_names"],
+            ).fetchone()
+            event_count = row["cnt"] or 0
+            last_eval = row["last_at"]
+
+        last_str = ""
+        if last_eval:
+            try:
+                ts = datetime.strptime(last_eval, "%Y-%m-%dT%H:%M:%S.%f")
+            except ValueError:
+                try:
+                    ts = datetime.strptime(last_eval, "%Y-%m-%dT%H:%M:%S")
+                except ValueError:
+                    ts = None
+            if ts:
+                delta = datetime.utcnow() - ts
+                secs = int(delta.total_seconds())
+                if secs < 60:
+                    last_str = f"last: {secs}s ago"
+                elif secs < 3600:
+                    last_str = f"last: {secs // 60}m ago"
+                else:
+                    last_str = f"last: {secs // 3600}h ago"
+
+        parts = [
+            f"  {info['name']:<22s}",
+            f"{info['policy_count']} policies",
+            f"{status:>8s}",
+        ]
+        if last_str:
+            parts.append(f"{last_str:>14s}")
+        if event_count:
+            parts.append(f"24h: {event_count} evals")
+        print("   ".join(parts))
+
+    # List standalone policies
+    standalone = []
+    for entry in sorted(os.listdir(POLICIES_DIR)):
+        entry_path = os.path.join(POLICIES_DIR, entry)
+        if os.path.isfile(entry_path) and entry.endswith((".yaml", ".yml")):
+            standalone.append(entry.replace(".yaml", "").replace(".yml", ""))
+    if standalone:
+        print(f"\nStandalone: {len(standalone)} policies ({', '.join(standalone)})")
+
+    db.close()
+
+
+def cmd_workflow(args):
+    """Show workflow details, or enable/disable a workflow."""
+    workflow_name = args.name
+    action = args.action
+
+    # Find the workflow directory
+    workflow_dir = os.path.join(POLICIES_DIR, workflow_name)
+    if not os.path.isdir(workflow_dir):
+        # Try matching by config name
+        found = False
+        for dir_name, dir_path in _get_workflow_dirs():
+            info = _load_workflow_info(dir_name, dir_path)
+            if info["name"] == workflow_name:
+                workflow_dir = dir_path
+                workflow_name = dir_name
+                found = True
+                break
+        if not found:
+            print(f"Workflow '{args.name}' not found.")
+            return
+
+    info = _load_workflow_info(workflow_name, workflow_dir)
+
+    if action == "enable":
+        disabled_path = os.path.join(workflow_dir, ".disabled")
+        if os.path.exists(disabled_path):
+            os.remove(disabled_path)
+        print(f"Workflow {info['name']} enabled ({info['policy_count']} policies active)")
+        return
+
+    if action == "disable":
+        disabled_path = os.path.join(workflow_dir, ".disabled")
+        with open(disabled_path, "w") as f:
+            f.write("")
+        print(f"Workflow {info['name']} disabled ({info['policy_count']} policies paused)")
+        return
+
+    if action == "status":
+        db = EventsDB(DB_PATH)
+        print(f"Workflow: {info['name']}")
+        print(f"  Status: {'enabled' if info['enabled'] else 'disabled'}")
+        print(f"  Policies: {info['policy_count']}")
+        if info["shared_config"]:
+            print(f"  Config:")
+            for k, v in info["shared_config"].items():
+                print(f"    {k}: {v}")
+        print()
+        print("  Policy evaluations (24h):")
+        for pname in info["policy_names"]:
+            row = db.conn.execute(
+                "SELECT COUNT(*) as cnt, MAX(evaluated_at) as last_at "
+                "FROM policy_eval_log WHERE policy_name = ? "
+                "AND evaluated_at >= datetime('now', '-24 hours')",
+                (pname,),
+            ).fetchone()
+            cnt = row["cnt"] or 0
+            last = row["last_at"] or "never"
+            print(f"    {pname:<35s}  {cnt:>4d} evals   last: {last}")
+        db.close()
+        return
+
+    # Default: show workflow details
+    print(f"Workflow: {info['name']}")
+    if info["description"]:
+        print(f"  Description: {info['description']}")
+    print(f"  Status:      {'enabled' if info['enabled'] else 'disabled'}")
+    print(f"  Directory:   {workflow_dir}")
+    print(f"  Policies:    {info['policy_count']}")
+    if info["shared_config"]:
+        print(f"  Config:")
+        for k, v in info["shared_config"].items():
+            print(f"    {k}: {v}")
+    print()
+    print("  Policies:")
+    for pname in info["policy_names"]:
+        print(f"    {pname}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="hex-events CLI")
     sub = parser.add_subparsers(dest="command")
@@ -696,6 +899,13 @@ def main():
     telem_p = sub.add_parser("telemetry", help="Show unified telemetry health overview")
     telem_p.add_argument("--json", action="store_true", help="Output as JSON")
 
+    sub.add_parser("workflows", help="List all workflows with status")
+
+    wf_p = sub.add_parser("workflow", help="Show/manage a workflow")
+    wf_p.add_argument("name", help="Workflow name (directory name)")
+    wf_p.add_argument("action", nargs="?", choices=["enable", "disable", "status"],
+                       help="Action to perform on the workflow")
+
     args = parser.parse_args()
     if args.command == "status":
         cmd_status(args)
@@ -715,6 +925,10 @@ def main():
         cmd_trace(args)
     elif args.command == "telemetry":
         cmd_telemetry(args)
+    elif args.command == "workflows":
+        cmd_workflows(args)
+    elif args.command == "workflow":
+        cmd_workflow(args)
     else:
         parser.print_help()
 

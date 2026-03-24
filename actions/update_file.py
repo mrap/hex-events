@@ -7,17 +7,22 @@ from actions import register
 
 @register("update-file")
 class UpdateFileAction:
-    def run(self, params: dict, event_payload: dict, db=None) -> dict:
+    def run(self, params: dict, event_payload: dict, db=None,
+            workflow_context=None) -> dict:
         target = params["target"]
         pattern = params["pattern"]
         replace = params["replace"]
+        # Build template context
+        tpl_ctx = {"event": event_payload}
+        if workflow_context:
+            tpl_ctx["workflow"] = workflow_context
         # Render templates
         if "{{" in target:
-            target = Template(target).render(event=event_payload)
+            target = Template(target).render(**tpl_ctx)
         if "{{" in pattern:
-            pattern = Template(pattern).render(event=event_payload)
+            pattern = Template(pattern).render(**tpl_ctx)
         if "{{" in replace:
-            replace = Template(replace).render(event=event_payload)
+            replace = Template(replace).render(**tpl_ctx)
         tmp_path = None
         try:
             with open(target) as f:

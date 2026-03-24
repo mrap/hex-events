@@ -30,7 +30,7 @@ def make_recipe(name, trigger, actions):
 
 class _AlwaysFailHandler:
     """Action handler that always returns error."""
-    def run(self, params, event_payload=None, db=None):
+    def run(self, params, event_payload=None, db=None, workflow_context=None):
         return {"status": "error", "output": "simulated failure"}
 
 
@@ -40,7 +40,7 @@ class _FailNTimesHandler:
         self.fail_count = fail_count
         self.call_count = 0
 
-    def run(self, params, event_payload=None, db=None):
+    def run(self, params, event_payload=None, db=None, workflow_context=None):
         self.call_count += 1
         if self.call_count <= self.fail_count:
             return {"status": "error", "output": f"failure {self.call_count}"}
@@ -48,7 +48,7 @@ class _FailNTimesHandler:
 
 
 class _AlwaysOkHandler:
-    def run(self, params, event_payload=None, db=None):
+    def run(self, params, event_payload=None, db=None, workflow_context=None):
         return {"status": "ok", "output": "success"}
 
 

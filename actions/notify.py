@@ -6,10 +6,14 @@ from actions import register
 
 @register("notify")
 class NotifyAction:
-    def run(self, params: dict, event_payload: dict, db=None) -> dict:
+    def run(self, params: dict, event_payload: dict, db=None,
+            workflow_context=None) -> dict:
         message = params["message"]
         if "{{" in message:
-            message = Template(message).render(event=event_payload)
+            tpl_ctx = {"event": event_payload}
+            if workflow_context:
+                tpl_ctx["workflow"] = workflow_context
+            message = Template(message).render(**tpl_ctx)
         try:
             result = subprocess.run(
                 ["bash", os.path.expanduser("~/.claude/scripts/hex-notify.sh"), message],

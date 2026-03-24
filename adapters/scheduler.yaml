@@ -4,6 +4,14 @@
 # See docs/design-v2.md for the timer model.
 
 schedules:
+  - name: 5m-tick
+    cron: "*/5 * * * *"
+    event: timer.tick.5m
+
+  - name: 15m-tick
+    cron: "*/15 * * * *"
+    event: timer.tick.15m
+
   - name: 30m-tick
     cron: "*/30 * * * *"
     event: timer.tick.30m

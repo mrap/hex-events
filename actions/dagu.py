@@ -4,7 +4,8 @@ from actions import register
 
 @register("dagu")
 class DaguAction:
-    def run(self, params: dict, event_payload: dict, db=None) -> dict:
+    def run(self, params: dict, event_payload: dict, db=None,
+            workflow_context=None) -> dict:
         workflow = params["workflow"]
         try:
             result = subprocess.run(

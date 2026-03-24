@@ -75,7 +75,8 @@ def match_policies(policies: list[Recipe], event_type: str) -> list[Recipe]:
 
 
 def run_action_with_retry(action, event_id: int, recipe_name: str, payload: dict,
-                          db: EventsDB, handler=None, sleep_fn=None):
+                          db: EventsDB, handler=None, sleep_fn=None,
+                          workflow_context=None):
     """Run an action with exponential backoff retry.
 
     Retries up to action.params.get('retries', 3) times on failure.
@@ -84,6 +85,7 @@ def run_action_with_retry(action, event_id: int, recipe_name: str, payload: dict
     Args:
         handler: Override the action handler (for testing). If None, looks up via registry.
         sleep_fn: Override time.sleep (for testing).
+        workflow_context: Optional dict {"name": ..., "config": {...}} for Jinja2 templates.
     Returns:
         The final result dict from the handler.
     """
@@ -102,7 +104,8 @@ def run_action_with_retry(action, event_id: int, recipe_name: str, payload: dict
 
     backoff = 1
     for attempt in range(max_retries + 1):
-        result = handler.run(action.params, event_payload=payload, db=db)
+        result = handler.run(action.params, event_payload=payload, db=db,
+                             workflow_context=workflow_context)
         status = result.get("status", "error")
 
         if status != "error":
@@ -184,7 +187,8 @@ def process_event(event: dict, policies: list[Recipe], db: EventsDB):
             continue
         matched_names.append(recipe.name)
         for action in recipe.actions:
-            run_action_with_retry(action, event_id, recipe.name, payload, db)
+            run_action_with_retry(action, event_id, recipe.name, payload, db,
+                                  workflow_context=None)
 
     recipe_column = ",".join(matched_names) if matched_names else None
     db.mark_processed(event_id, recipe_column)
@@ -245,6 +249,7 @@ def _process_event_policies(event: dict, policies: list, db: "EventsDB") -> int:
                     "rate_limited": 1,
                     "action_taken": 0,
                     "evaluated_at": now_ts,
+                    "workflow": policy.workflow,
                 })
             continue
         fired = False
@@ -258,8 +263,14 @@ def _process_event_policies(event: dict, policies: list, db: "EventsDB") -> int:
                 matched_names.append(rule.name)
                 fired = True
                 action_taken = 1
+                wf_ctx = None
+                if policy.workflow:
+                    wf_ctx = {"name": policy.workflow,
+                              "config": policy.workflow_config}
                 for action in rule.actions:
-                    result = run_action_with_retry(action, event_id, rule.name, payload, db)
+                    result = run_action_with_retry(action, event_id, rule.name,
+                                          payload, db,
+                                          workflow_context=wf_ctx)
                     actions_dispatched += 1
                     if result.get("status") == "error":
                         all_actions_succeeded = False
@@ -273,6 +284,7 @@ def _process_event_policies(event: dict, policies: list, db: "EventsDB") -> int:
                 "rate_limited": 0,
                 "action_taken": action_taken,
                 "evaluated_at": now_ts,
+                "workflow": policy.workflow,
             })
         if fired:
             record_fire(policy)

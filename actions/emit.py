@@ -7,7 +7,8 @@ from actions import register
 
 @register("emit")
 class EmitAction:
-    def run(self, params: dict, event_payload: dict, db=None) -> dict:
+    def run(self, params: dict, event_payload: dict, db=None,
+            workflow_context=None) -> dict:
         if not params.get("event"):
             return {"status": "error", "output": "emit action missing required 'event' parameter"}
 
@@ -16,7 +17,10 @@ class EmitAction:
         if isinstance(payload, str) and "{{" in payload:
             try:
                 from jinja2 import Template
-                payload = json.loads(Template(payload).render(event=event_payload))
+                tpl_ctx = {"event": event_payload}
+                if workflow_context:
+                    tpl_ctx["workflow"] = workflow_context
+                payload = json.loads(Template(payload).render(**tpl_ctx))
             except Exception as e:
                 return {"status": "error", "output": f"Template render failed: {e}"}
         delay = params.get("delay")

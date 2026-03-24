@@ -61,6 +61,8 @@ class Policy:
     source_file: Optional[str] = None
     lifecycle: str = "persistent"                  # persistent | oneshot-delete | oneshot-disable
     max_fires: Optional[int] = None               # fire at most N times, then auto-disable
+    workflow: Optional[str] = None                 # workflow directory name
+    workflow_config: dict = field(default_factory=dict)  # from _config.yaml
     # Runtime state — not from YAML
     last_fires: list[float] = field(default_factory=list)
 
@@ -187,8 +189,74 @@ def _policy_from_old(data: dict, source_file: str) -> Policy:
     )
 
 
+def _load_single_policy(fpath: str, workflow_name: str = None,
+                        workflow_config: dict = None,
+                        on_invalid=None) -> Optional[Policy]:
+    """Load a single policy YAML file. Returns None on error."""
+    try:
+        from policy_validator import validate_policy
+        with open(fpath) as f:
+            data = yaml.safe_load(f)
+        if not isinstance(data, dict):
+            log.warning("Skipping non-dict YAML: %s", fpath)
+            return None
+        if data.get("enabled") is False:
+            log.debug("Skipping disabled policy: %s", fpath)
+            return None
+        if _is_new_format(data):
+            errors = validate_policy(data, fpath)
+            if errors:
+                if on_invalid:
+                    on_invalid(fpath, errors)
+                else:
+                    for err in errors:
+                        log.warning("[POLICY VALIDATION] %s", err)
+                return None
+            if "name" not in data:
+                log.warning("Skipping policy without name: %s", fpath)
+                return None
+            policy = _policy_from_new(data, source_file=fpath)
+        elif _is_old_format(data):
+            policy = _policy_from_old(data, source_file=fpath)
+        else:
+            log.warning("Skipping unrecognized YAML format: %s", fpath)
+            return None
+        if workflow_name:
+            policy.workflow = workflow_name
+            policy.workflow_config = workflow_config or {}
+        return policy
+    except Exception as e:
+        log.warning("Failed to load policy %s: %s", fpath, e)
+        return None
+
+
+def _load_workflow_config(workflow_dir: str) -> dict:
+    """Load _config.yaml from a workflow directory. Returns {} if missing."""
+    config_path = os.path.join(workflow_dir, "_config.yaml")
+    if not os.path.isfile(config_path):
+        return {}
+    try:
+        with open(config_path) as f:
+            data = yaml.safe_load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception as e:
+        log.warning("Failed to load workflow config %s: %s", config_path, e)
+        return {}
+
+
+def _is_workflow_disabled(workflow_dir: str, workflow_cfg: dict) -> bool:
+    """Check if a workflow is disabled via .disabled file or config."""
+    if os.path.exists(os.path.join(workflow_dir, ".disabled")):
+        return True
+    return not workflow_cfg.get("enabled", True)
+
+
 def load_policies(policies_dir: str, on_invalid=None) -> list[Policy]:
-    """Load all .yaml/.yml files from a directory into Policy objects.
+    """Load policies from a directory, supporting workflow subdirectories.
+
+    Top-level .yaml/.yml files are standalone policies (backward compatible).
+    Subdirectories are workflows: policies inside them inherit the workflow
+    name and shared config from _config.yaml.
 
     Supports both new policy format (has 'rules' array) and old recipe format
     (has 'trigger' + 'actions'). Old format is auto-wrapped as a single-rule
@@ -200,37 +268,34 @@ def load_policies(policies_dir: str, on_invalid=None) -> list[Policy]:
     """
     from policy_validator import validate_policy
     policies = []
-    for fname in sorted(os.listdir(policies_dir)):
-        if not fname.endswith((".yaml", ".yml")):
-            continue
-        fpath = os.path.join(policies_dir, fname)
-        try:
-            with open(fpath) as f:
-                data = yaml.safe_load(f)
-            if not isinstance(data, dict):
-                log.warning("Skipping non-dict YAML: %s", fpath)
+    for entry in sorted(os.listdir(policies_dir)):
+        entry_path = os.path.join(policies_dir, entry)
+
+        if os.path.isfile(entry_path) and entry.endswith((".yaml", ".yml")):
+            # Standalone policy in root (backward compatible)
+            policy = _load_single_policy(entry_path)
+            if policy:
+                policies.append(policy)
+
+        elif os.path.isdir(entry_path):
+            # Workflow directory
+            workflow_cfg = _load_workflow_config(entry_path)
+            workflow_name = workflow_cfg.get("name", entry)
+            if _is_workflow_disabled(entry_path, workflow_cfg):
+                log.info("Skipping disabled workflow: %s", workflow_name)
                 continue
-            if data.get("enabled") is False:
-                log.debug("Skipping disabled policy: %s", fpath)
-                continue
-            if _is_new_format(data):
-                # Only validate new-format policies (old format has different schema)
-                errors = validate_policy(data, fpath)
-                if errors:
-                    if on_invalid:
-                        on_invalid(fpath, errors)
-                    else:
-                        for err in errors:
-                            log.warning("[POLICY VALIDATION] %s", err)
+            shared_config = workflow_cfg.get("config", {})
+            for fname in sorted(os.listdir(entry_path)):
+                if fname.startswith("_") or fname == ".disabled":
                     continue
-                if "name" not in data:
-                    log.warning("Skipping policy without name: %s", fpath)
+                if not fname.endswith((".yaml", ".yml")):
                     continue
-                policies.append(_policy_from_new(data, source_file=fpath))
-            elif _is_old_format(data):
-                policies.append(_policy_from_old(data, source_file=fpath))
-            else:
-                log.warning("Skipping unrecognized YAML format: %s", fpath)
-        except Exception as e:
-            log.warning("Failed to load policy %s: %s", fpath, e)
+                fpath = os.path.join(entry_path, fname)
+                policy = _load_single_policy(
+                    fpath, workflow_name=workflow_name,
+                    workflow_config=shared_config,
+                )
+                if policy:
+                    policies.append(policy)
+
     return policies

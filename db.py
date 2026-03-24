@@ -102,6 +102,10 @@ class EventsDB:
         if "dedup_key" not in cols:
             self.conn.execute("ALTER TABLE events ADD COLUMN dedup_key TEXT")
             self.conn.commit()
+        pel_cols = [r[1] for r in self.conn.execute("PRAGMA table_info(policy_eval_log)").fetchall()]
+        if "workflow" not in pel_cols:
+            self.conn.execute("ALTER TABLE policy_eval_log ADD COLUMN workflow TEXT")
+            self.conn.commit()
 
     def close(self):
         self.conn.close()
@@ -250,9 +254,9 @@ class EventsDB:
         self.conn.executemany(
             "INSERT INTO policy_eval_log "
             "(event_id, policy_name, rule_name, matched, conditions_passed, "
-            "condition_details, rate_limited, action_taken, evaluated_at) "
+            "condition_details, rate_limited, action_taken, evaluated_at, workflow) "
             "VALUES (:event_id, :policy_name, :rule_name, :matched, :conditions_passed, "
-            ":condition_details, :rate_limited, :action_taken, :evaluated_at)",
+            ":condition_details, :rate_limited, :action_taken, :evaluated_at, :workflow)",
             [
                 {
                     "event_id": r["event_id"],
@@ -264,6 +268,7 @@ class EventsDB:
                     "rate_limited": r.get("rate_limited", 0),
                     "action_taken": r.get("action_taken", 0),
                     "evaluated_at": r.get("evaluated_at", now),
+                    "workflow": r.get("workflow"),
                 }
                 for r in rows
             ],
