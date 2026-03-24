@@ -6,4 +6,5 @@ events.db-wal
 events.db-shm
 daemon.log
 fswatch.log
+hex_eventd.pid
 .pytest_cache/
