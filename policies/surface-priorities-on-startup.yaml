@@ -15,7 +15,7 @@ rules:
     actions:
       - type: shell
         command: |
-          if [ -f $HOME/mrap-hex/evolution/priority-ranked.yaml ]; then
+          if [ -f $AGENT_DIR/evolution/priority-ranked.yaml ]; then
             echo "[Priority Scoring] Top improvements:"
-            head -30 $HOME/mrap-hex/evolution/priority-ranked.yaml
+            head -30 $AGENT_DIR/evolution/priority-ranked.yaml
           fi

@@ -19,14 +19,14 @@ rules:
     actions:
       - type: shell
         command: |
-          python3 $HOME/mrap-hex/evolution/priority-score.py \
+          python3 $AGENT_DIR/evolution/priority-score.py \
             --top 5 \
-            --output $HOME/mrap-hex/evolution/priority-ranked.yaml
+            --output $AGENT_DIR/evolution/priority-ranked.yaml
         on_success:
           - type: emit
             event: improvement.scored
             payload:
-              ranked_path: $HOME/mrap-hex/evolution/priority-ranked.yaml
+              ranked_path: $AGENT_DIR/evolution/priority-ranked.yaml
               session_id: "{{ event.session_id }}"
         on_failure:
           - type: emit

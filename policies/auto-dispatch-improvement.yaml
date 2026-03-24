@@ -19,22 +19,22 @@ rules:
     actions:
       - type: shell
         command: |
-          python3 $HOME/mrap-hex/evolution/auto-dispatch.py \
-            --ranked $HOME/mrap-hex/evolution/priority-ranked.yaml \
-            --config $HOME/mrap-hex/evolution/engine-config.yaml \
+          python3 $AGENT_DIR/evolution/auto-dispatch.py \
+            --ranked $AGENT_DIR/evolution/priority-ranked.yaml \
+            --config $AGENT_DIR/evolution/engine-config.yaml \
             --dry-run
         on_success:
           - type: emit
             event: improvement.dispatch-attempted
             payload:
-              ranked_path: $HOME/mrap-hex/evolution/priority-ranked.yaml
+              ranked_path: $AGENT_DIR/evolution/priority-ranked.yaml
               mode: dry-run
               session_id: "{{ event.session_id }}"
         on_failure:
           - type: emit
             event: improvement.dispatch-attempted
             payload:
-              ranked_path: $HOME/mrap-hex/evolution/priority-ranked.yaml
+              ranked_path: $AGENT_DIR/evolution/priority-ranked.yaml
               mode: dry-run
               error: "auto-dispatch.py exited non-zero"
               session_id: "{{ event.session_id }}"
