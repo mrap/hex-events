@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """hex-eventd — persistent daemon for hex-events."""
+import fcntl
 import json
 import logging
 import logging.handlers
@@ -19,9 +20,11 @@ from policy import load_policies, check_rate_limit, record_fire
 from conditions import evaluate_conditions, evaluate_conditions_with_details
 from actions import get_action_handler
 from adapters.scheduler import SchedulerAdapter
+from policy_validator import validate_policy
 
 BASE_DIR = os.path.expanduser("~/.hex-events")
 DB_PATH = os.path.join(BASE_DIR, "events.db")
+PID_FILE = os.path.join(BASE_DIR, "hex_eventd.pid")
 LOG_FILE = os.path.join(BASE_DIR, "daemon.log")
 POLICIES_DIR = os.path.join(BASE_DIR, "policies")
 SCHEDULER_CONFIG = os.path.join(BASE_DIR, "adapters", "scheduler.yaml")
@@ -31,6 +34,27 @@ SCHEDULER_RELOAD_INTERVAL = 60  # reload scheduler config every minute
 HEARTBEAT_INTERVAL = 300  # heartbeat log every 5 minutes
 
 log = logging.getLogger("hex-events")
+
+
+def _acquire_singleton_lock():
+    """Acquire an exclusive lock on PID_FILE to prevent multiple daemon instances.
+
+    Uses fcntl.flock() which auto-releases on process death (no stale PID files).
+    Returns the open file handle — caller must keep it open for the lock to hold.
+    Exits with code 0 if another instance already holds the lock.
+    """
+    os.makedirs(BASE_DIR, exist_ok=True)
+    fh = open(PID_FILE, "w")
+    try:
+        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        print("hex-eventd: another instance is already running, exiting", file=sys.stderr)
+        fh.close()
+        sys.exit(0)
+    fh.write(str(os.getpid()))
+    fh.flush()
+    return fh
+
 
 def drain_deferred(db: EventsDB):
     """Drain due deferred events into the main events table.
@@ -223,6 +247,30 @@ def _process_event_policies(event: dict, policies: list, db: "EventsDB") -> int:
     return actions_dispatched
 
 
+def _load_policies_validated(policies_dir: str) -> list:
+    """Load policies from directory, validate each, skip invalid ones.
+
+    Logs errors to both daemon.log and stderr. Prints a startup summary.
+    """
+    skipped = [0]
+
+    def on_invalid(fpath, errors):
+        for err in errors:
+            msg = f"[POLICY VALIDATION ERROR] {err}"
+            log.error(msg)
+            print(msg, file=sys.stderr)
+        skipped[0] += 1
+
+    policies = load_policies(policies_dir, on_invalid=on_invalid)
+    n_valid = len(policies)
+    n_skipped = skipped[0]
+    summary = f"Loaded {n_valid} policies ({n_skipped} skipped due to validation errors)"
+    log.info(summary)
+    if n_skipped > 0:
+        print(summary, file=sys.stderr)
+    return policies
+
+
 def _setup_logging():
     """Configure logging to write directly to daemon.log via RotatingFileHandler.
 
@@ -240,6 +288,7 @@ def _setup_logging():
 
 
 def run_daemon():
+    pid_fh = _acquire_singleton_lock()
     _setup_logging()
     log.info("hex-eventd starting (pid=%d)", os.getpid())
 
@@ -273,9 +322,9 @@ def run_daemon():
     while running:
         now = time.time()
 
-        # Reload policies every 10 seconds (hot-reload).
+        # Reload policies every 10 seconds (hot-reload), with validation.
         if now - last_recipe_load > 10:
-            _policies = load_policies(POLICIES_DIR)
+            _policies = _load_policies_validated(POLICIES_DIR)
             last_recipe_load = now
 
         # Reload scheduler config periodically
@@ -327,6 +376,11 @@ def run_daemon():
         time.sleep(POLL_INTERVAL)
 
     db.close()
+    pid_fh.close()
+    try:
+        os.remove(PID_FILE)
+    except OSError:
+        pass
     log.info("hex-eventd stopped")
 
 if __name__ == "__main__":

@@ -1,0 +1,23 @@
+name: chain-q180-research-to-experiments
+description: >
+  When q-180 (UI brain research) completes, auto-dispatch the experiment
+  spec that uses its findings. Research informs experiment design.
+enabled: true
+
+requires:
+  events:
+    - boi.spec.completed
+
+rules:
+  - name: dispatch-experiments-after-q180
+    trigger:
+      event: boi.spec.completed
+    condition:
+      field: payload.spec_id
+      op: eq
+      value: "q-180"
+    actions:
+      - type: shell
+        command: >
+          bash ~/.boi/boi dispatch
+          /Users/mrap/mrap-hex/projects/hex-ui/experiments/chained-experiment-spec.md

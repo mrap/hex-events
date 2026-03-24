@@ -179,13 +179,18 @@ def _policy_from_old(data: dict, source_file: str) -> Policy:
     )
 
 
-def load_policies(policies_dir: str) -> list[Policy]:
+def load_policies(policies_dir: str, on_invalid=None) -> list[Policy]:
     """Load all .yaml/.yml files from a directory into Policy objects.
 
     Supports both new policy format (has 'rules' array) and old recipe format
     (has 'trigger' + 'actions'). Old format is auto-wrapped as a single-rule
     policy with inferred provides/requires.
+
+    on_invalid: optional callback(fpath: str, errors: list[str]) called when a
+        policy fails schema validation. If None, validation errors are logged as
+        warnings but the policy is still skipped.
     """
+    from policy_validator import validate_policy
     policies = []
     for fname in sorted(os.listdir(policies_dir)):
         if not fname.endswith((".yaml", ".yml")):
@@ -198,6 +203,15 @@ def load_policies(policies_dir: str) -> list[Policy]:
                 log.warning("Skipping non-dict YAML: %s", fpath)
                 continue
             if _is_new_format(data):
+                # Only validate new-format policies (old format has different schema)
+                errors = validate_policy(data, fpath)
+                if errors:
+                    if on_invalid:
+                        on_invalid(fpath, errors)
+                    else:
+                        for err in errors:
+                            log.warning("[POLICY VALIDATION] %s", err)
+                    continue
                 if "name" not in data:
                     log.warning("Skipping policy without name: %s", fpath)
                     continue

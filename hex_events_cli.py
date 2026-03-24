@@ -548,50 +548,56 @@ def _load_all_policies():
 
 
 def cmd_validate(args):
-    from validator import build_static_graph, validate_graph, load_adapter_events
+    from policy_validator import validate_policy_file
 
-    policies, policies_dir = _load_all_policies()
-    adapter_events = load_adapter_events()
-
-    print(f"Loaded {len(policies)} policies from {policies_dir}")
-    print(f"Adapter events: {sorted(adapter_events) or '(none)'}")
-    print()
-
-    graph = build_static_graph(policies, adapter_events=adapter_events)
-    result = validate_graph(graph)
-
-    if result["unsatisfied"]:
-        print(f"[ERROR] {len(result['unsatisfied'])} unsatisfied require(s):")
-        for u in result["unsatisfied"]:
-            consumers = ", ".join(u["required_by"])
-            print(f"  x {u['event']}  (required by: {consumers})")
+    # Determine which files to validate
+    if hasattr(args, "file") and args.file:
+        files = [args.file]
     else:
-        print("[OK] All requires satisfied.")
+        policies_dir = POLICIES_DIR if os.path.isdir(POLICIES_DIR) else RECIPES_DIR
+        if not os.path.isdir(policies_dir):
+            print("No policies directory found.")
+            sys.exit(0)
+        files = sorted(
+            os.path.join(policies_dir, f)
+            for f in os.listdir(policies_dir)
+            if f.endswith(".yaml") or f.endswith(".yml")
+        )
+
+    valid_count = 0
+    invalid_count = 0
+
+    for filepath in files:
+        errors = validate_policy_file(filepath)
+        try:
+            import yaml
+            with open(filepath) as f:
+                policy = yaml.safe_load(f)
+            rule_count = len(policy.get("rules", [])) if isinstance(policy, dict) else 0
+        except Exception:
+            rule_count = 0
+
+        display_path = os.path.relpath(filepath) if os.path.isabs(filepath) else filepath
+
+        if errors:
+            invalid_count += 1
+            print(f"{display_path}: ERROR")
+            for err in errors:
+                # Strip leading filename from error message for cleaner output
+                msg = err
+                if msg.startswith(filepath + ":"):
+                    msg = msg[len(filepath) + 1:].strip()
+                elif msg.startswith(filepath + " "):
+                    msg = msg[len(filepath):].strip()
+                print(f"  - {msg}")
+        else:
+            valid_count += 1
+            print(f"{display_path}: OK ({rule_count} rules)")
 
     print()
+    print(f"Summary: {valid_count} valid, {invalid_count} invalid")
 
-    if result["orphan_provides"]:
-        print(f"[WARN] {len(result['orphan_provides'])} orphan provide(s) (no consumer):")
-        for o in result["orphan_provides"]:
-            providers = ", ".join(o["provided_by"])
-            print(f"  ~ {o['event']}  (provided by: {providers})")
-    else:
-        print("[OK] No orphan provides.")
-
-    print()
-
-    if result["cycles"]:
-        print(f"[ERROR] {len(result['cycles'])} cycle(s) detected:")
-        for cycle in result["cycles"]:
-            print(f"  -> {' -> '.join(cycle)}")
-    else:
-        print("[OK] No cycles detected.")
-
-    print()
-    status = "VALID" if result["valid"] else "INVALID"
-    print(f"Validation: {status}")
-
-    if not result["valid"]:
+    if invalid_count > 0:
         sys.exit(1)
 
 
@@ -674,7 +680,8 @@ def main():
     test = sub.add_parser("test", help="Dry-run a recipe file")
     test.add_argument("recipe_file", help="Path to recipe YAML")
 
-    sub.add_parser("validate", help="Validate static policy event graph")
+    val_p = sub.add_parser("validate", help="Validate policy schema for all or a specific file")
+    val_p.add_argument("file", nargs="?", help="Specific policy file to validate (default: all)")
 
     graph_p = sub.add_parser("graph", help="Show event dependency graph")
 
