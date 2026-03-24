@@ -111,7 +111,7 @@ def make_dirty_repo(tmp_dir):
 def test_policy_loads():
     policy = load_gate_policy()
     assert policy.name == "boi-completion-gate"
-    assert len(policy.rules) == 2
+    assert len(policy.rules) == 1
 
 
 def test_policy_metadata():
@@ -126,23 +126,23 @@ def test_policy_provides_requires():
     policy = load_gate_policy()
     assert "boi.completion.verified" in policy.provides.get("events", [])
     assert "policy.violation" in policy.provides.get("events", [])
-    assert "boi.spec.completed" in policy.requires.get("events", [])
+    assert "boi.output.committed" in policy.requires.get("events", [])
 
 
 # ---------------------------------------------------------------------------
 # Test 2: Rule matching
 # ---------------------------------------------------------------------------
 
-def test_rule_matches_boi_spec_completed():
+def test_rule_matches_boi_output_committed():
     policy = load_gate_policy()
-    matching = [r for r in policy.rules if r.matches_event_type("boi.spec.completed")]
+    matching = [r for r in policy.rules if r.matches_event_type("boi.output.committed")]
     assert len(matching) == 1
-    assert matching[0].name == "verify-on-spec-completed"
+    assert matching[0].name == "verify-after-commit"
 
 
 def test_rule_does_not_match_other_events():
     policy = load_gate_policy()
-    for event in ["boi.spec.failed", "boi.iteration.done", "policy.violation"]:
+    for event in ["boi.spec.completed", "boi.spec.failed", "boi.iteration.done", "policy.violation"]:
         matching = [r for r in policy.rules if r.matches_event_type(event)]
         assert len(matching) == 0, f"Rule should not match {event}"
 
@@ -174,27 +174,14 @@ def test_on_success_emits_verified():
 
 
 def test_on_failure_emits_violation():
-    # The policy now uses a two-step retry: first attempt triggers auto-commit
-    # and re-verification; only the retry rule emits policy.violation.
     policy = load_gate_policy()
-    # First rule: on_failure triggers auto-commit + retry-verify (2 actions)
-    first_rule = policy.rules[0]
-    action = first_rule.actions[0]
+    rule = policy.rules[0]
+    action = rule.actions[0]
     on_failure = action.params["on_failure"]
-    assert len(on_failure) == 2
-    action_types = [a["type"] for a in on_failure]
-    assert "shell" in action_types
-    assert "emit" in action_types
-    retry_emit = next(a for a in on_failure if a["type"] == "emit")
-    assert retry_emit["event"] == "boi.completion.retry-verify"
-    # Second rule: on_failure emits policy.violation
-    retry_rule = policy.rules[1]
-    retry_action = retry_rule.actions[0]
-    retry_on_failure = retry_action.params["on_failure"]
-    assert len(retry_on_failure) == 1
-    assert retry_on_failure[0]["type"] == "emit"
-    assert retry_on_failure[0]["event"] == "policy.violation"
-    assert retry_on_failure[0]["payload"]["policy"] == "boi-completion-gate"
+    assert len(on_failure) == 1
+    assert on_failure[0]["type"] == "emit"
+    assert on_failure[0]["event"] == "policy.violation"
+    assert on_failure[0]["payload"]["policy"] == "boi-completion-gate"
 
 
 # ---------------------------------------------------------------------------
@@ -279,7 +266,7 @@ def test_integration_pipeline_dirty_repo_emits_violation():
         repo = make_dirty_repo(tmp)
         db = _make_temp_db(tmp)
 
-        _emit_and_process(db, policies, "boi.spec.completed", {
+        _emit_and_process(db, policies, "boi.output.committed", {
             "spec_id": "q-integration-test",
             "target_repo": repo,
             "tasks_done": 3,
@@ -309,7 +296,7 @@ def test_integration_pipeline_clean_repo_emits_verified():
         repo = make_clean_repo(tmp, remote)
         db = _make_temp_db(tmp)
 
-        _emit_and_process(db, policies, "boi.spec.completed", {
+        _emit_and_process(db, policies, "boi.output.committed", {
             "spec_id": "q-integration-clean",
             "target_repo": repo,
             "tasks_done": 5,
@@ -339,7 +326,7 @@ def test_integration_pipeline_dirty_then_clean():
 
         # Step 1: dirty repo → violation
         repo = make_dirty_repo(tmp)
-        _emit_and_process(db, policies, "boi.spec.completed", {
+        _emit_and_process(db, policies, "boi.output.committed", {
             "spec_id": "q-scenario-test",
             "target_repo": repo,
             "tasks_done": 3,
@@ -347,12 +334,16 @@ def test_integration_pipeline_dirty_then_clean():
         })
         assert _count_events(db, "policy.violation") >= 1
 
-        # Step 2: restore the bare remote (auto-commit already committed dirty files)
-        # make_dirty_repo created a bare remote at tmp/remote.git but then broke the URL.
-        # Restore the original remote URL and push the auto-committed changes.
+        # Step 2: simulate what auto-commit would have done — commit dirty files,
+        # restore the remote, and push so the repo is clean for the next verify.
         real_remote = os.path.join(tmp, "remote.git")
         subprocess.run(
             ["git", "-C", repo, "remote", "set-url", "origin", real_remote],
+            check=True, capture_output=True
+        )
+        subprocess.run(["git", "-C", repo, "add", "."], check=True, capture_output=True)
+        subprocess.run(
+            ["git", "-C", repo, "commit", "-m", "auto-commit boi output"],
             check=True, capture_output=True
         )
         subprocess.run(
@@ -361,7 +352,7 @@ def test_integration_pipeline_dirty_then_clean():
         )
 
         # Step 3: clean repo → verified
-        _emit_and_process(db, policies, "boi.spec.completed", {
+        _emit_and_process(db, policies, "boi.output.committed", {
             "spec_id": "q-scenario-test",
             "target_repo": repo,
             "tasks_done": 5,
