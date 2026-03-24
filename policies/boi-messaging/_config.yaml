@@ -1,0 +1,8 @@
+name: boi-messaging
+description: Inter-spec messaging, context forwarding, auto-skip cascades, timeouts, and priority management
+enabled: true
+
+config:
+  boi_state_dir: ~/.boi
+  boi_lib_dir: ~/boi
+  default_timeout_hours: 4

@@ -1,0 +1,69 @@
+name: boi-messaging-auto-timeout
+description: >
+  Monitors running specs for timeout. If a spec exceeds its max runtime
+  (default: 4 hours), sends CANCEL to the active worker and marks the
+  spec for human review. Runs on a schedule (every 10 minutes).
+
+provides:
+  events:
+    - boi.messaging.timeout_cancel
+
+requires:
+  events:
+    - system.cron.10min
+
+config:
+  default_timeout_hours: 4
+  escalation_timeout_hours: 8
+
+rules:
+  - name: cancel-timed-out-specs
+    trigger:
+      event: system.cron.10min
+    actions:
+      - type: shell
+        command: >
+          python3 -c "
+          import json, os, sys, time
+          sys.path.insert(0, os.path.expanduser('~/boi'))
+          from lib.db import Database
+          from lib.messaging import send_message
+
+          db = Database(os.path.expanduser('~/.boi/boi.db'))
+          timeout_hours = float(os.environ.get('BOI_SPEC_TIMEOUT_HOURS', '4'))
+          timeout_secs = timeout_hours * 3600
+
+          running = [e for e in db.list_specs() if e.get('status') == 'running']
+          canceled = []
+
+          for spec in running:
+              started_at = spec.get('started_at', 0)
+              elapsed = time.time() - started_at
+              if elapsed > timeout_secs:
+                  send_message(
+                      spec_id=spec['queue_id'],
+                      msg_type='CANCEL',
+                      payload={
+                          'reason': f'Spec timeout: running for {elapsed/3600:.1f}h (limit: {timeout_hours}h)',
+                          'auto_timeout': True
+                      },
+                      sender='hex-events',
+                      state_dir=os.path.expanduser('~/.boi'),
+                  )
+                  canceled.append({
+                      'spec_id': spec['queue_id'],
+                      'elapsed_hours': round(elapsed/3600, 1),
+                      'timeout_hours': timeout_hours
+                  })
+
+          if canceled:
+              print(json.dumps(canceled))
+          else:
+              sys.exit(1)
+          "
+        on_success:
+          - type: emit
+            event: boi.messaging.timeout_cancel
+            payload:
+              canceled_specs: "{{ action.stdout }}"
+              timestamp: "{{ now }}"

@@ -1,0 +1,23 @@
+name: devserver-monitor
+description: "Poll for dev7_2xlarge devserver availability near NYC every 5 minutes"
+standing_orders: []
+reflection_ids: []
+provides:
+  events:
+    - devserver.available
+requires:
+  events:
+    - timer.tick.5m
+rate_limit:
+  max_fires: 15
+  window: 1h
+rules:
+  - name: poll-availability
+    trigger:
+      event: timer.tick.5m
+    conditions: []
+    actions:
+      - type: shell
+        command: "bash ~/.hex-events/scripts/check-devserver.sh"
+        timeout: 60
+        retries: 1

@@ -1,0 +1,137 @@
+name: boi-messaging-auto-skip
+description: >
+  When a task is skipped or fails, find all downstream tasks that
+  depend on it (via Blocked by) and auto-skip them. If a worker is
+  currently executing a dependent task, send a SKIP message.
+
+provides:
+  events:
+    - boi.messaging.auto_skipped
+
+requires:
+  events:
+    - boi.task.skipped
+    - boi.task.failed
+
+rules:
+  - name: cascade-skip-on-task-skipped
+    trigger:
+      event: boi.task.skipped
+    actions:
+      - type: shell
+        command: >
+          python3 -c "
+          import json, os, re, sys
+          sys.path.insert(0, os.path.expanduser('~/boi'))
+          from lib.messaging import send_message
+          from lib.db import Database
+
+          spec_id = '{{ event.spec_id }}'
+          skipped_task = '{{ event.task_id }}'
+          spec_path = '{{ event.spec_path }}'
+
+          with open(spec_path) as f:
+              content = f.read()
+
+          blocked_pattern = re.compile(
+              r'### (t-\d+):.*?\n(PENDING|DONE|SKIPPED)\n.*?\*\*Blocked by:\*\*\s*([^\n]+)',
+              re.DOTALL
+          )
+
+          cascaded = []
+          for match in blocked_pattern.finditer(content):
+              task_id = match.group(1)
+              status = match.group(2)
+              blocked_by = match.group(3)
+
+              if skipped_task in blocked_by and status == 'PENDING':
+                  cascaded.append(task_id)
+
+          if cascaded:
+              db = Database(os.path.expanduser('~/.boi/boi.db'))
+              entries = db.list_specs()
+              entry = next((e for e in entries if e.get('queue_id') == spec_id), None)
+              if entry and entry.get('status') == 'running':
+                  for task_id in cascaded:
+                      send_message(
+                          spec_id=spec_id,
+                          msg_type='SKIP',
+                          payload={
+                              'reason': f'Dependency {skipped_task} was skipped',
+                              'cascade': True
+                          },
+                          sender='hex-events',
+                          state_dir=os.path.expanduser('~/.boi'),
+                          task_id=task_id,
+                      )
+              print(json.dumps({'cascaded': cascaded, 'trigger': skipped_task}))
+          else:
+              sys.exit(1)
+          "
+        on_success:
+          - type: emit
+            event: boi.messaging.auto_skipped
+            payload:
+              spec_id: "{{ event.spec_id }}"
+              trigger_task: "{{ event.task_id }}"
+              cascaded_tasks: "{{ action.stdout }}"
+
+  - name: cascade-skip-on-task-failed
+    trigger:
+      event: boi.task.failed
+    actions:
+      - type: shell
+        command: >
+          python3 -c "
+          import json, os, re, sys
+          sys.path.insert(0, os.path.expanduser('~/boi'))
+          from lib.messaging import send_message
+          from lib.db import Database
+
+          spec_id = '{{ event.spec_id }}'
+          failed_task = '{{ event.task_id }}'
+          spec_path = '{{ event.spec_path }}'
+
+          with open(spec_path) as f:
+              content = f.read()
+
+          blocked_pattern = re.compile(
+              r'### (t-\d+):.*?\n(PENDING)\n.*?\*\*Blocked by:\*\*\s*([^\n]+)',
+              re.DOTALL
+          )
+
+          cascaded = []
+          for match in blocked_pattern.finditer(content):
+              task_id = match.group(1)
+              blocked_by = match.group(3)
+              if failed_task in blocked_by:
+                  cascaded.append(task_id)
+
+          if cascaded:
+              db = Database(os.path.expanduser('~/.boi/boi.db'))
+              entries = db.list_specs()
+              entry = next((e for e in entries if e.get('queue_id') == spec_id), None)
+              if entry and entry.get('status') == 'running':
+                  for task_id in cascaded:
+                      send_message(
+                          spec_id=spec_id,
+                          msg_type='SKIP',
+                          payload={
+                              'reason': f'Dependency {failed_task} failed',
+                              'cascade': True
+                          },
+                          sender='hex-events',
+                          state_dir=os.path.expanduser('~/.boi'),
+                          task_id=task_id,
+                      )
+              print(json.dumps({'cascaded': cascaded, 'trigger': failed_task}))
+          else:
+              sys.exit(1)
+          "
+        on_success:
+          - type: emit
+            event: boi.messaging.auto_skipped
+            payload:
+              spec_id: "{{ event.spec_id }}"
+              trigger_task: "{{ event.task_id }}"
+              cascaded_tasks: "{{ action.stdout }}"

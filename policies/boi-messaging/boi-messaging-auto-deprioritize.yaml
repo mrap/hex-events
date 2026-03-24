@@ -1,0 +1,77 @@
+name: boi-messaging-auto-deprioritize
+description: >
+  When a high-priority spec is dispatched and all workers are busy,
+  automatically deprioritize the lowest-priority running spec so its
+  worker yields after the current task. The freed worker then picks up
+  the higher-priority spec.
+
+provides:
+  events:
+    - boi.messaging.sent
+
+requires:
+  events:
+    - boi.spec.dispatched
+
+rules:
+  - name: deprioritize-lowest-on-high-priority-dispatch
+    trigger:
+      event: boi.spec.dispatched
+    conditions:
+      - type: shell
+        command: >
+          python3 -c "
+          import json, sys, os
+          sys.path.insert(0, os.path.expanduser('~/boi'))
+          from lib.db import Database
+
+          db = Database(os.path.expanduser('~/.boi/boi.db'))
+
+          new_priority = int('{{ event.priority }}')
+
+          running = [e for e in db.list_specs() if e.get('status') == 'running']
+          free_workers = db.get_free_worker_count()
+
+          if free_workers > 0:
+              sys.exit(1)
+
+          lowest = max(running, key=lambda s: s.get('priority', 100), default=None)
+          if lowest and lowest.get('priority', 100) > new_priority:
+              print(json.dumps({
+                  'target_spec': lowest['queue_id'],
+                  'target_priority': lowest.get('priority', 100),
+                  'new_spec': '{{ event.spec_id }}',
+                  'new_priority': new_priority
+              }))
+              sys.exit(0)
+          sys.exit(1)
+          "
+    actions:
+      - type: shell
+        command: >
+          python3 -c "
+          import json, os, sys
+          sys.path.insert(0, os.path.expanduser('~/boi'))
+          from lib.messaging import send_message
+
+          info = json.loads('{{ condition.stdout }}')
+          send_message(
+              spec_id=info['target_spec'],
+              msg_type='DEPRIORITIZE',
+              payload={
+                  'reason': f'Higher priority spec {info[\"new_spec\"]} dispatched (priority {info[\"new_priority\"]})',
+                  'new_priority': info['target_priority'] + 100
+              },
+              sender='hex-events',
+              state_dir=os.path.expanduser('~/.boi'),
+          )
+          print(f'Deprioritized {info[\"target_spec\"]} for {info[\"new_spec\"]}')
+          "
+        on_success:
+          - type: emit
+            event: boi.messaging.sent
+            payload:
+              msg_type: DEPRIORITIZE
+              target_spec: "{{ condition.stdout | json_extract('target_spec') }}"
+              triggered_by: "{{ event.spec_id }}"
+              reason: higher_priority_dispatch

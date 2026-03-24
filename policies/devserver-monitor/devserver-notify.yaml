@@ -1,0 +1,25 @@
+name: devserver-notify
+description: "Send GChat notification when dev7_2xlarge becomes available near NYC. Self-disables after first notification to avoid spam."
+standing_orders: []
+reflection_ids: []
+provides:
+  events: []
+requires:
+  events:
+    - devserver.available
+rate_limit:
+  max_fires: 1
+  window: 24h
+rules:
+  - name: notify-availability
+    trigger:
+      event: devserver.available
+    conditions: []
+    actions:
+      - type: notify
+        message: "dev7_2xlarge available near NYC ({{ event.regions | default('unknown region') }}, count: {{ event.count | default('?') }})! Reserve at https://www.internalfb.com/devservers/reservation"
+      - type: shell
+        command: >
+          echo "$(date): Notified Mike about dev7_2xlarge availability. Disabling monitor to prevent spam." >> /tmp/devserver-monitor.log &&
+          sed -i 's/^name: devserver-monitor/name: devserver-monitor\nenabled: false/' ~/.hex-events/policies/devserver-monitor.yaml 2>/dev/null || true
+        timeout: 10

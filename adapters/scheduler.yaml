@@ -66,3 +66,6 @@ schedules:
 
   - name: external-boi-spec-completed
     event: boi.spec.completed
+
+  - name: external-devserver-available
+    event: devserver.available

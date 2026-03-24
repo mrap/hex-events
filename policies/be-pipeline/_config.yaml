@@ -1,0 +1,6 @@
+enabled: true
+description: Better Engineering autonomous code quality pipeline
+team_dirs: www/flib/intern/entity/aiyou/
+scripts_dir: ~/.boi/be-pipeline/scripts/
+queue_file: ~/.boi/be-pipeline/queue/be-queue.json
+max_concurrent: 3

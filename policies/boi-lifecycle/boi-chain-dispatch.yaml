@@ -1,0 +1,48 @@
+name: boi-chain-dispatch
+description: >
+  Chains BOI spec dispatches based on completion dependencies.
+  When prerequisite specs complete, automatically dispatches the next spec.
+  Supports multi-prerequisite gates (A AND B must complete before C fires).
+
+provides:
+  events:
+    - boi.chain.dispatched
+    - boi.chain.waiting
+
+requires:
+  events:
+    - boi.completion.verified
+
+rules:
+  # Chain: q-012 (BE pipeline) + q-013 (OSS improvements) → OD worker delegation
+  - name: gate-od-delegation
+    trigger:
+      event: boi.completion.verified
+    conditions:
+      - type: check_all_completed
+        spec_ids:
+          - "q-012"  # BE pipeline design
+          - "q-013"  # OSS improvements + sync
+        state_file: /tmp/hex-events/chain-od-delegation.json
+    actions:
+      - type: shell
+        command: >
+          boi dispatch
+          --spec /home/mrap/hex/projects/boi/od-delegation-spec.md
+          --mode discover
+          --priority 20
+        on_success:
+          - type: emit
+            event: boi.chain.dispatched
+            payload:
+              chain: od-delegation
+              triggered_by:
+                - "q-012"
+                - "q-013"
+              dispatched_spec: od-delegation-spec.md
+        on_failure:
+          - type: emit
+            event: boi.chain.waiting
+            payload:
+              chain: od-delegation
+              reason: "Dispatch failed: {{ action.stderr }}"

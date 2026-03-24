@@ -1,0 +1,8 @@
+name: devserver-monitor
+description: Monitor devserver availability and send notifications
+enabled: true
+
+config:
+  scripts_dir: ~/.hex-events/scripts
+  server_type: dev7_2xlarge
+  region: NYC
