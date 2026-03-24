@@ -2,6 +2,8 @@ name: chain-q180-research-to-experiments
 description: >
   When q-180 (UI brain research) completes, auto-dispatch the experiment
   spec that uses its findings. Research informs experiment design.
+# Re-enabled after condition evaluation fix (q-194) — now correctly filters
+# on payload.spec_id == "q-180" so it only fires for the right event.
 enabled: true
 
 requires:
