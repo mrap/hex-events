@@ -284,6 +284,15 @@ class EventsDB:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    def count_policy_fires(self, policy_name: str) -> int:
+        """Count distinct events where the policy took action (for max_fires tracking)."""
+        row = self.conn.execute(
+            "SELECT COUNT(DISTINCT event_id) as cnt FROM policy_eval_log "
+            "WHERE policy_name = ? AND action_taken = 1",
+            (policy_name,),
+        ).fetchone()
+        return row["cnt"] if row else 0
+
     def get_policy_evals_since(self, policy_name: str, since_hours: int) -> list[dict]:
         """Return policy eval log entries for a policy within the last N hours."""
         rows = self.conn.execute(

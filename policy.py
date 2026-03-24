@@ -59,6 +59,8 @@ class Policy:
     requires: dict = field(default_factory=dict)   # {"events": [...]}
     rate_limit: Optional[dict] = None              # {"max_fires": N, "window": "1h"}
     source_file: Optional[str] = None
+    lifecycle: str = "persistent"                  # persistent | oneshot-delete | oneshot-disable
+    max_fires: Optional[int] = None               # fire at most N times, then auto-disable
     # Runtime state — not from YAML
     last_fires: list[float] = field(default_factory=list)
 
@@ -150,6 +152,8 @@ def _policy_from_new(data: dict, source_file: str) -> Policy:
         provides=dict(data.get("provides") or {}),
         requires=dict(data.get("requires") or {}),
         rate_limit=data.get("rate_limit"),
+        lifecycle=data.get("lifecycle", "persistent"),
+        max_fires=data.get("max_fires"),
         rules=rules,
         source_file=source_file,
     )

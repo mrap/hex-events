@@ -2,9 +2,16 @@ name: chain-q180-research-to-experiments
 description: >
   When q-180 (UI brain research) completes, auto-dispatch the experiment
   spec that uses its findings. Research informs experiment design.
-# Re-enabled after condition evaluation fix (q-194) — now correctly filters
-# on payload.spec_id == "q-180" so it only fires for the right event.
-enabled: true
+# This policy already served its purpose (q-180 is complete).
+# It is kept as a canonical example of the oneshot-delete pattern:
+# a policy that fires once and then self-destructs, ideal for ad-hoc
+# workflows where you want a one-time chain reaction between specs.
+enabled: false
+
+# Oneshot pattern: fire once, then delete this file automatically.
+# Use lifecycle: oneshot-delete for ad-hoc workflows (fire-and-forget).
+# Use lifecycle: oneshot-disable to keep the file but prevent re-firing.
+lifecycle: oneshot-delete
 
 requires:
   events:

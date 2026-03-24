@@ -11,6 +11,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+import yaml
+
 # Add parent to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -128,6 +130,42 @@ def run_action_with_retry(action, event_id: int, recipe_name: str, payload: dict
     return result
 
 
+def _disable_policy_file(path: str):
+    """Rewrite a policy YAML file with enabled: false."""
+    with open(path) as f:
+        data = yaml.safe_load(f)
+    data["enabled"] = False
+    tmp_path = path + ".tmp"
+    with open(tmp_path, "w") as f:
+        yaml.dump(data, f, default_flow_style=False)
+    os.rename(tmp_path, path)
+
+
+def _handle_policy_lifecycle(policy, db: EventsDB):
+    """Handle oneshot/max_fires lifecycle after successful policy fire."""
+    lc = getattr(policy, "lifecycle", "persistent")
+    max_fires = getattr(policy, "max_fires", None)
+    path = policy.source_file
+
+    if lc == "oneshot-delete":
+        if path and os.path.exists(path):
+            os.remove(path)
+            log.info("Policy %s fired (oneshot) and self-destructed", policy.name)
+    elif lc == "oneshot-disable":
+        if path and os.path.exists(path):
+            _disable_policy_file(path)
+            log.info("Policy %s fired (oneshot) and disabled", policy.name)
+
+    if max_fires is not None:
+        fires_so_far = db.count_policy_fires(policy.name)
+        total = fires_so_far + 1  # +1 for the current fire (not yet logged)
+        if total >= max_fires:
+            if path and os.path.exists(path):
+                _disable_policy_file(path)
+                log.info("Policy %s reached max_fires=%d and was auto-disabled",
+                         policy.name, max_fires)
+
+
 def process_event(event: dict, policies: list[Recipe], db: EventsDB):
     event_type = event["event_type"]
     event_id = event["id"]
@@ -210,6 +248,7 @@ def _process_event_policies(event: dict, policies: list, db: "EventsDB") -> int:
                 })
             continue
         fired = False
+        all_actions_succeeded = True
         for rule in matching_rules:
             conditions_passed, cond_details = evaluate_conditions_with_details(
                 rule.conditions, payload, db=db
@@ -220,8 +259,10 @@ def _process_event_policies(event: dict, policies: list, db: "EventsDB") -> int:
                 fired = True
                 action_taken = 1
                 for action in rule.actions:
-                    run_action_with_retry(action, event_id, rule.name, payload, db)
+                    result = run_action_with_retry(action, event_id, rule.name, payload, db)
                     actions_dispatched += 1
+                    if result.get("status") == "error":
+                        all_actions_succeeded = False
             eval_rows.append({
                 "event_id": event_id,
                 "policy_name": policy.name,
@@ -235,6 +276,8 @@ def _process_event_policies(event: dict, policies: list, db: "EventsDB") -> int:
             })
         if fired:
             record_fire(policy)
+            if all_actions_succeeded:
+                _handle_policy_lifecycle(policy, db)
 
     if eval_rows:
         try:
