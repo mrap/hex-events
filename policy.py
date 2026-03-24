@@ -107,7 +107,11 @@ def _parse_actions(raw: list) -> list[Action]:
 def _parse_rule(data: dict, policy_name: str, idx: int) -> Rule:
     name = data.get("name") or f"{policy_name}.rule-{idx}"
     trigger_event = data["trigger"]["event"]
-    conditions = _parse_conditions(data.get("conditions", []))
+    # Support both plural 'conditions' (list) and singular 'condition' (dict)
+    raw_conditions = data.get("conditions") or []
+    if not raw_conditions and "condition" in data:
+        raw_conditions = [data["condition"]]
+    conditions = _parse_conditions(raw_conditions)
     actions = _parse_actions(data.get("actions", []))
     return Rule(name=name, trigger_event=trigger_event,
                 conditions=conditions, actions=actions)
@@ -201,6 +205,9 @@ def load_policies(policies_dir: str, on_invalid=None) -> list[Policy]:
                 data = yaml.safe_load(f)
             if not isinstance(data, dict):
                 log.warning("Skipping non-dict YAML: %s", fpath)
+                continue
+            if data.get("enabled") is False:
+                log.debug("Skipping disabled policy: %s", fpath)
                 continue
             if _is_new_format(data):
                 # Only validate new-format policies (old format has different schema)

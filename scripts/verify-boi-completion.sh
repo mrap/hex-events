@@ -45,10 +45,15 @@ echo "[OK]    Working tree is clean"
 echo "[CHECK] git diff origin/HEAD..HEAD (unpushed commits)"
 # Fetch quietly so we compare against latest remote state
 git fetch --quiet 2>/dev/null || true
-UNPUSHED=$(git diff origin/HEAD..HEAD 2>/dev/null)
+# Use tracking branch if available; fall back to origin/HEAD
+UPSTREAM=$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null || echo "")
+if [[ -z "$UPSTREAM" ]]; then
+    UPSTREAM="origin/HEAD"
+fi
+UNPUSHED=$(git log "${UPSTREAM}..HEAD" --oneline 2>/dev/null)
 if [[ -n "$UNPUSHED" ]]; then
     echo "[FAIL]  Unpushed commits in $TARGET_REPO" >&2
-    git log origin/HEAD..HEAD --oneline 2>/dev/null >&2
+    echo "$UNPUSHED" >&2
     exit 1
 fi
 echo "[OK]    No unpushed commits"

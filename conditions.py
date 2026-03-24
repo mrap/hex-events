@@ -1,5 +1,6 @@
 # conditions.py
 """Condition evaluator for hex-events recipes."""
+import fnmatch
 import re
 from policy import Condition
 from db import parse_duration
@@ -59,6 +60,30 @@ def _evaluate_one(cond: Condition, payload: dict, db) -> bool:
     return passed
 
 
+def _resolve_field(field: str, payload: dict):
+    """Resolve a field path against the payload.
+
+    Paths starting with 'payload.' traverse the payload dict using dot-notation.
+    E.g. 'payload.spec_id' → payload['spec_id']
+         'payload.tasks.completed' → payload['tasks']['completed']
+    Other field names are looked up directly in the payload.
+    Returns None if any step in the path is missing.
+    """
+    if field.startswith("payload."):
+        parts = field[len("payload."):].split(".")
+    else:
+        parts = [field]
+
+    current = payload
+    for part in parts:
+        if not isinstance(current, dict):
+            return None
+        if part not in current:
+            return None
+        current = current[part]
+    return current
+
+
 def _evaluate_one_with_actual(cond: Condition, payload: dict, db) -> tuple:
     """Return (actual_value, passed: bool) for a single condition."""
     # Check for count() function
@@ -70,7 +95,7 @@ def _evaluate_one_with_actual(cond: Condition, payload: dict, db) -> tuple:
         seconds = parse_duration(duration_str)
         actual = db.count_events(event_type, seconds=seconds)
     else:
-        actual = payload.get(cond.field)
+        actual = _resolve_field(cond.field, payload)
         if actual is None:
             return None, False
 
@@ -91,6 +116,10 @@ def _evaluate_one_with_actual(cond: Condition, payload: dict, db) -> tuple:
         passed = actual <= expected
     elif op == "contains":
         passed = str(expected) in str(actual)
+    elif op == "glob":
+        passed = fnmatch.fnmatch(str(actual), str(expected))
+    elif op == "regex":
+        passed = bool(re.search(str(expected), str(actual)))
     else:
         passed = False
 

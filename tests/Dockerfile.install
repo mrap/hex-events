@@ -8,6 +8,12 @@ ENV HEX_EVENTS_NO_LAUNCHCTL=1
 
 WORKDIR /app
 
+# Install git and procps (pgrep) — needed by tests
+RUN apt-get update && apt-get install -y --no-install-recommends git procps && rm -rf /var/lib/apt/lists/*
+
+# Configure git identity at system level so it's found even when HOME is overridden in tests
+RUN git config --system user.email "test@test.com" && git config --system user.name "Test"
+
 # Copy entire repo into container
 COPY . /app/
 

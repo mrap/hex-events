@@ -10,7 +10,7 @@ from conditions import evaluate_conditions
 from actions import get_action_handler
 
 # Test the daemon's process_event function (extracted from daemon for testability)
-from hex_eventd import process_event, match_recipes
+from hex_eventd import process_event, match_policies as match_recipes
 
 @pytest.fixture
 def db():

@@ -164,7 +164,7 @@ def test_provides_requires_explicit():
             "name": "p",
             "provides": {"events": ["x.done", "y.ready"]},
             "requires": {"events": ["a.start"]},
-            "rules": [{"name": "r", "trigger": {"event": "a.start"}, "actions": []}],
+            "rules": [{"name": "r", "trigger": {"event": "a.start"}, "actions": [{"type": "notify"}]}],
         })
         policies = load_policies(d)
 
