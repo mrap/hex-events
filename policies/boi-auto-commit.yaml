@@ -32,3 +32,12 @@ rules:
             payload:
               spec_id: "{{ event.spec_id }}"
               target_repo: "{{ event.target_repo }}"
+  - name: archive-on-commit
+    trigger:
+      event: boi.output.committed
+    actions:
+      - type: shell
+        command: >
+          bash ~/.boi/scripts/boi-completion-to-archive.sh
+          "{{ event.spec_id }}"
+          "{{ event.target_repo }}"
