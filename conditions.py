@@ -55,11 +55,6 @@ def evaluate_conditions_with_details(
     return True, details
 
 
-def _evaluate_one(cond: Condition, payload: dict, db) -> bool:
-    _, passed = _evaluate_one_with_actual(cond, payload, db)
-    return passed
-
-
 def _resolve_field(field: str, payload: dict):
     """Resolve a field path against the payload.
 
