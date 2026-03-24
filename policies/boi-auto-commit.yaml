@@ -25,6 +25,7 @@ rules:
           bash ~/.hex-events/scripts/auto-commit-boi-output.sh
           "{{ event.spec_id }}"
           "{{ event.target_repo }}"
+          "$HOME/.boi/queue/{{ event.spec_id }}.changed-files"
         on_success:
           - type: emit
             event: boi.output.committed

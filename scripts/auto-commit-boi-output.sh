@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
 # auto-commit-boi-output.sh — Auto-commit and push BOI spec output in a target repo
-# Usage: auto-commit-boi-output.sh <spec_id> <target_repo_path>
+# Usage: auto-commit-boi-output.sh <spec_id> <target_repo_path> [<changed-files-path>]
 # Part of hex-ops auto-remediation
 
 set -uo pipefail
 
 SPEC_ID="${1:-}"
 TARGET_REPO="${2:-}"
+CHANGED_FILES_MANIFEST="${3:-}"
 OPS_LOG="${HOME}/.boi/ops-actions.log"
 
 if [[ -z "$SPEC_ID" || -z "$TARGET_REPO" ]]; then
-    echo "Usage: $0 <spec_id> <target_repo_path>" >&2
+    echo "Usage: $0 <spec_id> <target_repo_path> [<changed-files-path>]" >&2
     exit 1
 fi
 
@@ -30,8 +31,21 @@ if [[ -z "$STATUS" ]]; then
     exit 0
 fi
 
-# Stage all changes (respects .gitignore)
-git -C "$TARGET_REPO" add -A
+# Stage changes — use manifest if available, otherwise fall back to git add -A
+if [[ -n "$CHANGED_FILES_MANIFEST" && -f "$CHANGED_FILES_MANIFEST" && -s "$CHANGED_FILES_MANIFEST" ]]; then
+    # Read manifest and stage only the listed files (skip missing files)
+    while IFS= read -r filepath || [[ -n "$filepath" ]]; do
+        [[ -z "$filepath" ]] && continue
+        if [[ -e "$TARGET_REPO/$filepath" ]]; then
+            git -C "$TARGET_REPO" add -- "$filepath"
+        else
+            echo "[auto-commit] Skipping missing file from manifest: $filepath"
+        fi
+    done < "$CHANGED_FILES_MANIFEST"
+else
+    echo "[auto-commit] WARNING: No changed-files manifest for $SPEC_ID, falling back to git add -A" | tee -a "$OPS_LOG" >&2
+    git -C "$TARGET_REPO" add -A
+fi
 
 # Commit
 COMMIT_MSG="feat: BOI ${SPEC_ID} output — auto-committed by hex-ops"
