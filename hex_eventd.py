@@ -177,7 +177,7 @@ def process_event(event: dict, policies: list[Recipe], db: EventsDB):
     except json.JSONDecodeError as e:
         log.error("Event %s has malformed JSON payload %r: %s", event_id, event["payload"], e)
         db.mark_processed(event_id, None)
-        return
+        return 0
 
     matched = match_policies(policies, event_type)
     matched_names = []
@@ -208,7 +208,7 @@ def _process_event_policies(event: dict, policies: list, db: "EventsDB") -> int:
     except json.JSONDecodeError as e:
         log.error("Event %s has malformed JSON payload %r: %s", event_id, event["payload"], e)
         db.mark_processed(event_id, None)
-        return
+        return 0
 
     matched_names = []
     eval_rows = []

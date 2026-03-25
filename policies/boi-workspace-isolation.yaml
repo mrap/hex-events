@@ -24,7 +24,7 @@ rules:
         event: policy.violation
         payload:
           policy: boi-workspace-isolation
-          spec_id: "{{ event.spec_id }}"
+          spec_id: "{{ event.spec_id or event.queue_id }}"
           worker_id: "{{ event.worker_id }}"
           leaked_files: "{{ event.leaked_files }}"
           worktree_path: "{{ event.worktree_path }}"
@@ -41,7 +41,7 @@ rules:
       - type: emit
         event: boi.workspace.repeated-leak
         payload:
-          spec_id: "{{ event.spec_id }}"
+          spec_id: "{{ event.spec_id or event.queue_id }}"
           message: "3+ workspace leaks in 1h — spec may have structural isolation problem"
       - type: notify
-        message: "BOI workspace leak alert: 3+ leaks in 1h from spec {{ event.spec_id }} — structural isolation problem suspected"
+        message: "BOI workspace leak alert: 3+ leaks in 1h from spec {{ event.spec_id or event.queue_id }} — structural isolation problem suspected"

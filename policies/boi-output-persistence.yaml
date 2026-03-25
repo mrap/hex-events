@@ -29,9 +29,9 @@ rules:
       - type: emit
         event: boi.output.check-due
         delay: 2m
-        cancel_group: "boi-output-check-{{ event.spec_id }}"
+        cancel_group: "boi-output-check-{{ event.spec_id or event.queue_id }}"
         payload:
-          spec_id: "{{ event.spec_id }}"
+          spec_id: "{{ event.spec_id or event.queue_id }}"
           output_paths: "{{ event.output_paths }}"
 
   - name: check-output-files-exist
@@ -53,5 +53,5 @@ rules:
             payload:
               policy: boi-output-persistence
               rule: R-047
-              spec_id: "{{ event.spec_id }}"
+              spec_id: "{{ event.spec_id or event.queue_id }}"
               message: "BOI iteration output files missing after worktree cleanup"

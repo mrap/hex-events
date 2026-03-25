@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # auto-commit-boi-output.sh — Auto-commit and push BOI spec output in a target repo
-# Usage: auto-commit-boi-output.sh <spec_id> <target_repo_path> [<changed-files-path>]
+# Usage: auto-commit-boi-output.sh <spec_id> <target_repo_path> [<changed-files-path>] [<spec-path>]
 # Part of hex-ops auto-remediation
 
 set -uo pipefail
@@ -8,10 +8,36 @@ set -uo pipefail
 SPEC_ID="${1:-}"
 TARGET_REPO="${2:-}"
 CHANGED_FILES_MANIFEST="${3:-}"
+SPEC_PATH_ARG="${4:-}"
 OPS_LOG="${HOME}/.boi/ops-actions.log"
 
-if [[ -z "$SPEC_ID" || -z "$TARGET_REPO" ]]; then
+# Derive TARGET_REPO from spec file when empty
+if [[ -z "$TARGET_REPO" && -n "$SPEC_ID" ]]; then
+    # Prefer explicit spec_path arg, fall back to queue location
+    _SPEC_FILE="${SPEC_PATH_ARG:-${HOME}/.boi/queue/${SPEC_ID}.spec.md}"
+    if [[ -f "$_SPEC_FILE" ]]; then
+        if grep -qF '**Target repo:**' "$_SPEC_FILE" 2>/dev/null; then
+            TARGET_REPO=$(grep -m1 -F '**Target repo:**' "$_SPEC_FILE" | sed 's/.*\*\*Target repo:\*\*[[:space:]]*//' | tr -d '`' | xargs)
+        elif grep -qF '**Target:**' "$_SPEC_FILE" 2>/dev/null; then
+            TARGET_REPO=$(grep -m1 -F '**Target:**' "$_SPEC_FILE" | sed 's/.*\*\*Target:\*\*[[:space:]]*//' | tr -d '`' | xargs)
+        fi
+        # Expand ~ to $HOME
+        if [[ "$TARGET_REPO" == "~"* ]]; then
+            TARGET_REPO="${HOME}${TARGET_REPO#\~}"
+        fi
+        if [[ -n "$TARGET_REPO" ]]; then
+            echo "[auto-commit] Derived target_repo from spec: $TARGET_REPO" >&2
+        fi
+    fi
+fi
+
+if [[ -z "$SPEC_ID" ]]; then
     echo "Usage: $0 <spec_id> <target_repo_path> [<changed-files-path>]" >&2
+    exit 1
+fi
+
+if [[ -z "$TARGET_REPO" ]]; then
+    echo "[auto-commit] ERROR: No target_repo for spec ${SPEC_ID} — add **Target repo:** to spec file at ~/.boi/queue/${SPEC_ID}.spec.md" >&2
     exit 1
 fi
 

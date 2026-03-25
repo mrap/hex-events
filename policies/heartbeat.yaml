@@ -1,0 +1,40 @@
+name: heartbeat
+description: >
+  Every 30 minutes: gather system state, assess, notify if needed.
+  Hex's always-on awareness layer.
+standing_orders: []
+reflection_ids: []
+requires:
+  events:
+    - timer.tick.30m
+
+provides:
+  events:
+    - heartbeat.checked
+    - heartbeat.alert
+
+rate_limit:
+  max_fires: 3
+  window: 1h
+
+rules:
+  - name: heartbeat-gather-and-assess
+    trigger:
+      event: timer.tick.30m
+    actions:
+      - type: shell
+        command: |
+          bash ~/.hex-events/scripts/heartbeat-check.sh 2>/dev/null | \
+          python3 ~/.hex-events/scripts/heartbeat-assess.py
+        on_success:
+          - type: emit
+            event: heartbeat.checked
+            payload:
+              status: ok
+        on_failure:
+          - type: notify
+            message: "Heartbeat alert: {{ action.stdout }}"
+          - type: emit
+            event: heartbeat.alert
+            payload:
+              reasons: "{{ action.stdout }}"

@@ -26,18 +26,18 @@ rules:
       - type: shell
         command: >
           bash ~/.hex-events/scripts/verify-boi-completion.sh
-          "{{ event.spec_id }}"
+          "{{ event.spec_id or event.queue_id }}"
           "{{ event.target_repo }}"
         on_success:
           - type: emit
             event: boi.completion.verified
             payload:
-              spec_id: "{{ event.spec_id }}"
+              spec_id: "{{ event.spec_id or event.queue_id }}"
               target_repo: "{{ event.target_repo }}"
         on_failure:
           - type: emit
             event: policy.violation
             payload:
               policy: boi-completion-gate
-              spec_id: "{{ event.spec_id }}"
+              spec_id: "{{ event.spec_id or event.queue_id }}"
               message: "Tests or push failed after commit. Code is committed but not verified."
