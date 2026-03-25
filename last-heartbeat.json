@@ -1,1 +1,1 @@
-{"timestamp": "2026-03-24T23:00:00", "boi": {"running": 0, "failed": 5}, "landings": {"done": 1, "total": 5}, "threads": 2, "unread_msgs": 15, "events_health": "ok"}
+{"timestamp": "2026-03-25T04:00:01", "boi": {"running": 4, "failed": 1}, "landings": {"done": 0, "total": 0}, "threads": 1, "unread_msgs": null, "events_health": "ok"}
