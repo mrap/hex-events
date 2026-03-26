@@ -24,6 +24,10 @@ schedules:
     cron: "0 0 * * *"
     event: timer.tick.daily
 
+  - name: 2h-tick
+    cron: "0 */2 * * *"
+    event: timer.tick.2h
+
   - name: 4h-tick
     cron: "0 */4 * * *"
     event: timer.tick.4h
@@ -31,6 +35,10 @@ schedules:
   - name: daily-9am-tick
     cron: "0 9 * * *"
     event: timer.tick.daily.9am
+
+  - name: daily-6am-tick
+    cron: "0 6 * * *"
+    event: timer.tick.daily.6am
 
   - name: weekly-tick
     cron: "0 9 * * 0"
