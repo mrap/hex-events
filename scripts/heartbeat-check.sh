@@ -6,6 +6,9 @@
 
 set -uo pipefail
 
+# Attribution source for any events emitted by this script or its policy
+HEX_SOURCE="hex:heartbeat"
+
 AGENT_DIR="${AGENT_DIR:-$HOME/mrap-hex}"
 TIMESTAMP="$(date -u '+%Y-%m-%dT%H:%M:%S')"
 

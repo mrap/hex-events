@@ -18,6 +18,9 @@ AGENT_DIR = os.environ.get("AGENT_DIR", os.path.expanduser("~/mrap-hex"))
 WATCHLIST = Path(AGENT_DIR) / "me" / "watchlist.md"
 STATE_FILE = Path(os.path.expanduser("~/.hex-events/watchlist-state.json"))
 
+# Attribution source for events emitted by this script or its policy
+HEX_SOURCE = "hex:watchlist"
+
 
 def load_state():
     if STATE_FILE.exists():

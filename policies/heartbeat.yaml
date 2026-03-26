@@ -29,6 +29,7 @@ rules:
         on_success:
           - type: emit
             event: heartbeat.checked
+            source: "hex:heartbeat"
             payload:
               status: ok
         on_failure:
@@ -36,5 +37,6 @@ rules:
             message: "Heartbeat alert: {{ action.stdout }}"
           - type: emit
             event: heartbeat.alert
+            source: "hex:heartbeat"
             payload:
               reasons: "{{ action.stdout }}"

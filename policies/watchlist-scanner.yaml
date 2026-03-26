@@ -29,6 +29,7 @@ rules:
         on_success:
           - type: emit
             event: watchlist.checked
+            source: "hex:watchlist"
             payload:
               status: no-changes
         on_failure:
@@ -36,5 +37,6 @@ rules:
             message: "{{ action.stdout }}"
           - type: emit
             event: watchlist.development-detected
+            source: "hex:watchlist"
             payload:
               details: "{{ action.stdout }}"

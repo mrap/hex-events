@@ -34,10 +34,11 @@ class EmitAction:
                 if db is None:
                     return {"status": "error", "output": "Cannot defer event: no database connection"}
                 fire_at = (datetime.utcnow() + timedelta(seconds=seconds)).isoformat()
+                source = params.get("source", "policy-emit")
                 db.insert_deferred(
                     event_type,
                     json.dumps(payload),
-                    "policy-emit",
+                    source,
                     fire_at,
                     cancel_group=cancel_group,
                 )
@@ -47,5 +48,6 @@ class EmitAction:
 
         # Immediate emit
         if db:
-            db.insert_event(event_type, json.dumps(payload), "recipe-emit")
+            source = params.get("source", "policy-emit")
+            db.insert_event(event_type, json.dumps(payload), source)
         return {"status": "success", "emitted": event_type}
