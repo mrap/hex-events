@@ -107,7 +107,8 @@ def _evaluate_shell_condition(command: str, payload: dict) -> tuple:
     if "{{" in command:
         try:
             from jinja2 import Template
-            command = Template(command).render(event=payload)
+            from datetime import datetime
+            command = Template(command).render(event=payload, now=datetime.utcnow())
         except Exception as e:
             log.warning("Shell condition template render failed: %s", e)
             return None, False

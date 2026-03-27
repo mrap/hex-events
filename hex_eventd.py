@@ -449,7 +449,7 @@ def _dispatch_sub_actions(sub_actions, event_payload, action_result, db,
     from actions import get_action_handler
 
     action_ctx = action_result.get("_action_result", action_result)
-    tpl_ctx = {"event": event_payload, "action": action_ctx}
+    tpl_ctx = {"event": event_payload, "action": action_ctx, "now": datetime.utcnow()}
     if workflow_context:
         tpl_ctx["workflow"] = workflow_context
 
