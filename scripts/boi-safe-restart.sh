@@ -12,6 +12,13 @@ CANARY_TIMEOUT=120
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') [boi-restart] $1" | tee -a "$OPS_LOG"; }
 fail() { log "FAILED at stage $1: $2"; exit 1; }
 
+# Prevent concurrent restarts (git pull triggers post-merge hook which
+# re-emits git.pull, which would invoke this script again).
+LOCK_FILE="${HOME}/.boi/restart.lock"
+mkdir -p "$(dirname "$LOCK_FILE")"
+exec 200>"$LOCK_FILE"
+flock -n 200 || { log "Another restart already in progress, skipping."; exit 0; }
+
 # ── Stage 1: STOP ──────────────────────────────────────────────────────────
 log "Stage 1: STOP — stopping BOI daemon"
 if pgrep -f "boi/daemon.py" > /dev/null 2>&1; then
@@ -127,9 +134,6 @@ rm -f "$CANARY_SPEC"
 log "  Canary dispatched."
 
 # ── Stage 8: PROMOTE ───────────────────────────────────────────────────────
-log "Stage 8: PROMOTE — emitting upgrade.verified"
-python3 ~/.hex-events/hex_emit.py boi.upgrade.verified \
-    "{\"prev_head\": \"$PREV_HEAD\", \"new_head\": \"$NEW_HEAD\"}" 2>/dev/null || {
-    log "  WARN: hex_emit.py failed — upgrade event not emitted"
-}
+# boi.upgrade.verified is emitted by the boi-restart-on-pull policy's
+# on_success block when this script exits 0. No need to emit here.
 log "COMPLETE: BOI safely restarted ($PREV_HEAD -> $NEW_HEAD)"
