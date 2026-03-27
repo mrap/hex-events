@@ -54,18 +54,14 @@ class ShellAction:
             )
             if result.returncode == 0:
                 action_result = {"stdout": result.stdout.strip(), "returncode": 0}
-                self._run_sub_actions(params.get("on_success"), event_payload,
-                                      action_result, db=db,
-                                      workflow_context=workflow_context)
-                return {"status": "success", "output": result.stdout.strip()}
+                return {"status": "success", "output": result.stdout.strip(),
+                        "_action_result": action_result}
             else:
                 error_output = result.stderr.strip() or result.stdout.strip() or f"exit code {result.returncode}"
                 action_result = {"stderr": error_output,
                                  "returncode": result.returncode}
-                self._run_sub_actions(params.get("on_failure"), event_payload,
-                                      action_result, db=db,
-                                      workflow_context=workflow_context)
                 return {"status": "error", "output": error_output,
-                        "code": result.returncode}
+                        "code": result.returncode,
+                        "_action_result": action_result}
         except subprocess.TimeoutExpired:
             return {"status": "error", "output": f"timeout after {timeout}s"}

@@ -112,6 +112,8 @@ def run_action_with_retry(action, event_id: int, recipe_name: str, payload: dict
             db.log_action(event_id, recipe_name, action.type,
                           json.dumps(action.params), status,
                           result.get("output", ""))
+            _dispatch_sub_actions(action.params.get("on_success"), payload,
+                                  result, db, workflow_context=workflow_context)
             return result
 
         # Action failed
@@ -129,8 +131,48 @@ def run_action_with_retry(action, event_id: int, recipe_name: str, payload: dict
             db.log_action(event_id, recipe_name, action.type,
                           json.dumps(action.params), "error",
                           f"Permanently failed after {max_retries} retries: {err_detail}")
+            _dispatch_sub_actions(action.params.get("on_failure"), payload,
+                                  result, db, workflow_context=workflow_context)
 
     return result
+
+
+def _dispatch_sub_actions(sub_actions, event_payload, action_result, db,
+                          workflow_context=None):
+    """Dispatch on_success or on_failure sub-actions. Called exactly once."""
+    if not sub_actions:
+        return
+    from jinja2 import Template
+    from actions import get_action_handler
+
+    action_ctx = action_result.get("_action_result", action_result)
+    tpl_ctx = {"event": event_payload, "action": action_ctx}
+    if workflow_context:
+        tpl_ctx["workflow"] = workflow_context
+
+    for raw in (sub_actions or []):
+        atype = raw.get("type")
+        handler = get_action_handler(atype)
+        if not handler:
+            continue
+        params = {}
+        for k, v in raw.items():
+            if k == "type":
+                continue
+            if isinstance(v, str) and "{{" in v:
+                params[k] = Template(v).render(**tpl_ctx)
+            elif isinstance(v, dict):
+                rendered = {}
+                for dk, dv in v.items():
+                    if isinstance(dv, str) and "{{" in dv:
+                        rendered[dk] = Template(dv).render(**tpl_ctx)
+                    else:
+                        rendered[dk] = dv
+                params[k] = rendered
+            else:
+                params[k] = v
+        handler.run(params, event_payload=event_payload, db=db,
+                    workflow_context=workflow_context)
 
 
 def _disable_policy_file(path: str):
