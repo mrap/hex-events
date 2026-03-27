@@ -92,7 +92,7 @@ class EventsDB:
         self.conn = sqlite3.connect(path)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")
-        self.conn.execute("PRAGMA busy_timeout=5000")
+        self.conn.execute("PRAGMA busy_timeout=30000")
         self.conn.executescript(SCHEMA)
         self._migrate()
 

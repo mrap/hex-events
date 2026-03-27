@@ -5,6 +5,12 @@ events.db
 events.db-wal
 events.db-shm
 daemon.log
+daemon.log.*
 fswatch.log
 hex_eventd.pid
 .pytest_cache/
+hex_eventd.pid
+hex_eventd.lock
+health.json
+logs/
+.stfolder/

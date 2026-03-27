@@ -6,6 +6,8 @@ import logging
 import logging.handlers
 import os
 import signal
+import subprocess
+import sqlite3
 import sys
 import time
 from datetime import datetime
@@ -27,7 +29,9 @@ from policy_validator import validate_policy
 BASE_DIR = os.path.expanduser("~/.hex-events")
 DB_PATH = os.path.join(BASE_DIR, "events.db")
 PID_FILE = os.path.join(BASE_DIR, "hex_eventd.pid")
+LOCK_FILE = os.path.join(BASE_DIR, "hex_eventd.lock")
 LOG_FILE = os.path.join(BASE_DIR, "daemon.log")
+HEALTH_FILE = os.path.join(BASE_DIR, "health.json")
 POLICIES_DIR = os.path.join(BASE_DIR, "policies")
 SCHEDULER_CONFIG = os.path.join(BASE_DIR, "adapters", "scheduler.yaml")
 POLL_INTERVAL = 2  # seconds
@@ -35,28 +39,327 @@ JANITOR_INTERVAL = 3600  # run janitor every hour
 SCHEDULER_RELOAD_INTERVAL = 60  # reload scheduler config every minute
 HEARTBEAT_INTERVAL = 300  # heartbeat log every 5 minutes
 
+# Database lock recovery thresholds
+DB_LOCK_CONSECUTIVE_THRESHOLD = 10   # consecutive lock errors before recovery attempt
+DB_LOCK_RECOVERY_BACKOFF = 30       # seconds to wait after recovery attempt
+DB_LOCK_MAX_RECOVERY_ATTEMPTS = 3   # max recovery attempts before giving up and restarting
+
 log = logging.getLogger("hex-events")
 
 
-def _acquire_singleton_lock():
-    """Acquire an exclusive lock on PID_FILE to prevent multiple daemon instances.
+# ---------------------------------------------------------------------------
+# Singleton and startup safety
+# ---------------------------------------------------------------------------
 
-    Uses fcntl.flock() which auto-releases on process death (no stale PID files).
-    Returns the open file handle — caller must keep it open for the lock to hold.
+def _kill_competing_hex_eventd_processes(my_pid: int):
+    """Find and kill any other hex_eventd.py processes.
+
+    Uses /proc to find processes without shelling out to find/ps with broad
+    globs. Only kills processes matching our exact script name.
+    """
+    killed = []
+    script_name = "hex_eventd.py"
+    try:
+        for entry in os.listdir("/proc"):
+            if not entry.isdigit():
+                continue
+            pid = int(entry)
+            if pid == my_pid:
+                continue
+            try:
+                cmdline_path = f"/proc/{pid}/cmdline"
+                with open(cmdline_path, "rb") as f:
+                    cmdline = f.read().decode("utf-8", errors="replace")
+                # cmdline uses null bytes as separators
+                if script_name in cmdline:
+                    os.kill(pid, signal.SIGTERM)
+                    killed.append(pid)
+            except (OSError, PermissionError):
+                continue
+    except OSError:
+        pass
+
+    if killed:
+        # Give them a moment to exit cleanly
+        time.sleep(1)
+        for pid in killed:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
+
+    return killed
+
+
+def _clean_stale_db_files():
+    """Remove stale WAL and SHM files if no process holds the database open.
+
+    After killing competing processes, leftover -wal and -shm files can cause
+    lock issues. We verify no one holds the DB by attempting an exclusive lock
+    on the DB file itself, then remove the journal files.
+    """
+    wal_path = DB_PATH + "-wal"
+    shm_path = DB_PATH + "-shm"
+
+    stale_files = [p for p in [wal_path, shm_path] if os.path.exists(p)]
+    if not stale_files:
+        return
+
+    # Try to open the DB exclusively to verify it's free
+    try:
+        test_conn = sqlite3.connect(DB_PATH, timeout=2)
+        # Force a checkpoint to flush WAL contents into the main DB
+        test_conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        test_conn.close()
+        log.info("Startup: checkpointed WAL successfully")
+    except sqlite3.OperationalError as e:
+        # Can't checkpoint. Remove stale files if they exist.
+        log.warning("Startup: could not checkpoint WAL (%s), removing stale files", e)
+        for path in stale_files:
+            try:
+                os.remove(path)
+                log.info("Startup: removed stale file %s", path)
+            except OSError:
+                pass
+
+
+def _verify_db_writable() -> bool:
+    """Verify the database is writable before entering the event loop.
+
+    Opens a connection, writes a test row, deletes it. Returns True on success.
+    """
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=5)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS _health_check "
+            "(id INTEGER PRIMARY KEY, ts TEXT)"
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO _health_check (id, ts) VALUES (1, ?)",
+            (datetime.utcnow().isoformat(),),
+        )
+        conn.commit()
+        conn.close()
+        return True
+    except sqlite3.OperationalError as e:
+        log.error("Startup: DB not writable: %s", e)
+        return False
+
+
+def _acquire_singleton_lock():
+    """Acquire an exclusive lock to prevent multiple daemon instances.
+
+    Uses a dedicated .lock file (not the PID file) with fcntl.flock().
+    The lock auto-releases on process death. No stale lock file issues.
+    Writes PID to the PID file separately for diagnostics.
     Exits with code 0 if another instance already holds the lock.
     """
     os.makedirs(BASE_DIR, exist_ok=True)
-    fh = open(PID_FILE, "w")
+    lock_fh = open(LOCK_FILE, "w")
     try:
-        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(lock_fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
         print("hex-eventd: another instance is already running, exiting", file=sys.stderr)
-        fh.close()
+        lock_fh.close()
         sys.exit(0)
-    fh.write(str(os.getpid()))
-    fh.flush()
-    return fh
+    lock_fh.write(str(os.getpid()))
+    lock_fh.flush()
 
+    # Also write PID file for diagnostic tools
+    with open(PID_FILE, "w") as f:
+        f.write(str(os.getpid()))
+
+    return lock_fh
+
+
+# ---------------------------------------------------------------------------
+# Health monitoring
+# ---------------------------------------------------------------------------
+
+class HealthMonitor:
+    """Tracks daemon health and writes status to a JSON file for external checks."""
+
+    def __init__(self):
+        self.consecutive_db_lock_errors = 0
+        self.total_db_lock_errors = 0
+        self.last_successful_cycle = time.time()
+        self.last_event_processed = 0.0
+        self.recovery_attempts = 0
+        self.events_processed_total = 0
+        self.actions_fired_total = 0
+        self.state = "starting"  # starting, healthy, degraded, recovering
+
+    def record_success(self, events_count: int = 0, actions_count: int = 0):
+        """Record a successful event loop cycle."""
+        self.consecutive_db_lock_errors = 0
+        self.last_successful_cycle = time.time()
+        self.events_processed_total += events_count
+        self.actions_fired_total += actions_count
+        if events_count > 0:
+            self.last_event_processed = time.time()
+        if self.state != "healthy":
+            log.info("Health: recovered, state -> healthy")
+        self.state = "healthy"
+
+    def record_db_lock_error(self):
+        """Record a database lock error. Returns True if recovery should be attempted."""
+        self.consecutive_db_lock_errors += 1
+        self.total_db_lock_errors += 1
+
+        if self.consecutive_db_lock_errors == 1:
+            log.warning("Database lock error detected (1st)")
+        elif self.consecutive_db_lock_errors == DB_LOCK_CONSECUTIVE_THRESHOLD:
+            log.error(
+                "Database lock error threshold reached (%d consecutive). "
+                "Attempting recovery.",
+                DB_LOCK_CONSECUTIVE_THRESHOLD,
+            )
+            self.state = "degraded"
+            return True
+        elif self.consecutive_db_lock_errors % DB_LOCK_CONSECUTIVE_THRESHOLD == 0:
+            # Repeated threshold crossings
+            self.state = "degraded"
+            return True
+
+        return False
+
+    def write_health_file(self):
+        """Write current health status to a JSON file for external monitoring."""
+        data = {
+            "pid": os.getpid(),
+            "state": self.state,
+            "timestamp": datetime.utcnow().isoformat(),
+            "last_successful_cycle": self.last_successful_cycle,
+            "seconds_since_success": time.time() - self.last_successful_cycle,
+            "consecutive_db_lock_errors": self.consecutive_db_lock_errors,
+            "total_db_lock_errors": self.total_db_lock_errors,
+            "recovery_attempts": self.recovery_attempts,
+            "events_processed_total": self.events_processed_total,
+            "actions_fired_total": self.actions_fired_total,
+        }
+        tmp = HEALTH_FILE + ".tmp"
+        try:
+            with open(tmp, "w") as f:
+                json.dump(data, f, indent=2)
+            os.rename(tmp, HEALTH_FILE)
+        except OSError as e:
+            log.error("Failed to write health file: %s", e)
+
+
+# ---------------------------------------------------------------------------
+# Database lock recovery
+# ---------------------------------------------------------------------------
+
+def _find_db_lock_holder() -> dict | None:
+    """Identify which process holds a lock on the events database.
+
+    Checks /proc/*/fd/ for file descriptors pointing to events.db.
+    Returns {"pid": int, "cmdline": str} or None.
+    """
+    my_pid = os.getpid()
+    db_realpath = os.path.realpath(DB_PATH)
+
+    try:
+        for entry in os.listdir("/proc"):
+            if not entry.isdigit():
+                continue
+            pid = int(entry)
+            if pid == my_pid:
+                continue
+            fd_dir = f"/proc/{pid}/fd"
+            try:
+                for fd in os.listdir(fd_dir):
+                    try:
+                        target = os.readlink(f"{fd_dir}/{fd}")
+                        if target == db_realpath or target.startswith(db_realpath):
+                            # Found it. Read cmdline for diagnostics.
+                            with open(f"/proc/{pid}/cmdline", "rb") as f:
+                                cmdline = f.read().decode("utf-8", errors="replace")
+                                cmdline = cmdline.replace("\x00", " ").strip()
+                            return {"pid": pid, "cmdline": cmdline}
+                    except OSError:
+                        continue
+            except OSError:
+                continue
+    except OSError:
+        pass
+    return None
+
+
+def _attempt_db_recovery(db_obj: EventsDB, health: HealthMonitor) -> EventsDB | None:
+    """Attempt to recover from a persistent database lock.
+
+    Strategy:
+    1. Identify the process holding the lock
+    2. If it's another hex_eventd.py, kill it (shouldn't happen with flock, but safety net)
+    3. If it's something else (e.g., a Claude session doing hex_emit.py), wait with backoff
+    4. Checkpoint WAL to flush any pending writes
+    5. Reconnect to the database
+
+    Returns a new EventsDB instance on success, or None on failure.
+    """
+    health.recovery_attempts += 1
+    health.state = "recovering"
+
+    holder = _find_db_lock_holder()
+    if holder:
+        log.warning(
+            "DB lock held by PID %d: %s",
+            holder["pid"], holder["cmdline"][:200],
+        )
+
+        # If it's another daemon instance, kill it
+        if "hex_eventd.py" in holder["cmdline"]:
+            log.warning("Killing competing daemon PID %d", holder["pid"])
+            try:
+                os.kill(holder["pid"], signal.SIGTERM)
+                time.sleep(2)
+                os.kill(holder["pid"], signal.SIGKILL)
+            except OSError:
+                pass
+        else:
+            # It's a transient process (hex_emit.py, hex-events CLI, etc.)
+            # Wait for it to finish rather than killing it
+            log.info(
+                "Lock holder is not a daemon (PID %d). Waiting %ds for it to release.",
+                holder["pid"], DB_LOCK_RECOVERY_BACKOFF,
+            )
+            time.sleep(DB_LOCK_RECOVERY_BACKOFF)
+    else:
+        log.info("No lock holder found. Stale WAL/SHM likely. Cleaning up.")
+
+    # Close existing connection
+    try:
+        db_obj.close()
+    except Exception:
+        pass
+
+    # Clean stale files and checkpoint
+    _clean_stale_db_files()
+
+    # Try to reconnect
+    try:
+        new_db = EventsDB(DB_PATH)
+        # Verify writable
+        new_db.conn.execute(
+            "INSERT OR REPLACE INTO _health_check (id, ts) VALUES (1, ?)",
+            (datetime.utcnow().isoformat(),),
+        )
+        new_db.conn.commit()
+        log.info("DB recovery successful. Reconnected.")
+        health.state = "healthy"
+        health.consecutive_db_lock_errors = 0
+        return new_db
+    except sqlite3.OperationalError as e:
+        log.error("DB recovery failed: %s", e)
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Event processing (unchanged logic, extracted for clarity)
+# ---------------------------------------------------------------------------
 
 def drain_deferred(db: EventsDB):
     """Drain due deferred events into the main events table.
@@ -384,11 +687,34 @@ def _setup_logging():
     root.addHandler(fh)
 
 
-def run_daemon():
-    pid_fh = _acquire_singleton_lock()
-    _setup_logging()
-    log.info("hex-eventd starting (pid=%d)", os.getpid())
+# ---------------------------------------------------------------------------
+# Main daemon loop
+# ---------------------------------------------------------------------------
 
+def run_daemon():
+    # Phase 1: Acquire singleton lock (exits if another instance running)
+    lock_fh = _acquire_singleton_lock()
+    _setup_logging()
+    my_pid = os.getpid()
+    log.info("hex-eventd starting (pid=%d)", my_pid)
+
+    # Phase 2: Kill any competing hex_eventd.py processes (belt + suspenders)
+    killed = _kill_competing_hex_eventd_processes(my_pid)
+    if killed:
+        log.warning("Startup: killed competing daemon PIDs: %s", killed)
+        time.sleep(1)
+
+    # Phase 3: Clean stale WAL/SHM files
+    _clean_stale_db_files()
+
+    # Phase 4: Verify DB is writable
+    if not _verify_db_writable():
+        log.error("Startup: DB not writable after cleanup. Exiting for systemd restart.")
+        lock_fh.close()
+        sys.exit(1)
+
+    # Phase 5: Initialize
+    health = HealthMonitor()
     db = EventsDB(DB_PATH)
 
     scheduler = SchedulerAdapter(config_path=SCHEDULER_CONFIG)
@@ -412,12 +738,18 @@ def run_daemon():
     last_recipe_load = 0
     last_scheduler_reload = 0
     last_heartbeat = time.time()
+    last_health_write = 0
     _hb_events = 0
     _hb_actions = 0
     _policies = []
+    cycle_had_db_error = False
+
+    log.info("hex-eventd ready (pid=%d)", my_pid)
+    health.state = "healthy"
 
     while running:
         now = time.time()
+        cycle_had_db_error = False
 
         # Reload policies every 10 seconds (hot-reload), with validation.
         if now - last_recipe_load > 10:
@@ -429,36 +761,95 @@ def run_daemon():
             scheduler.reload()
             last_scheduler_reload = now
 
-        # Tick the scheduler — emits timer events for due cron windows
+        # Tick the scheduler -- emits timer events for due cron windows
         try:
             scheduler.tick(db, now=datetime.utcnow())
+        except sqlite3.OperationalError as e:
+            if "database is locked" in str(e):
+                cycle_had_db_error = True
+            else:
+                log.error("Scheduler tick error: %s", e)
         except Exception as e:
             log.error("Scheduler tick error: %s", e)
 
         # Drain deferred events whose fire_at has passed
-        try:
-            drain_deferred(db)
-        except Exception as e:
-            log.error("Error draining deferred events: %s", e)
+        if not cycle_had_db_error:
+            try:
+                drain_deferred(db)
+            except sqlite3.OperationalError as e:
+                if "database is locked" in str(e):
+                    cycle_had_db_error = True
+                else:
+                    log.error("Error draining deferred events: %s", e)
+            except Exception as e:
+                log.error("Error draining deferred events: %s", e)
 
         # Process unprocessed events
-        try:
-            events = db.get_unprocessed()
-            _hb_events += len(events)
-            for event in events:
-                _hb_actions += _process_event_policies(event, _policies, db)
-        except Exception as e:
-            log.error("Error processing events: %s", e)
+        cycle_events = 0
+        cycle_actions = 0
+        if not cycle_had_db_error:
+            try:
+                events = db.get_unprocessed()
+                cycle_events = len(events)
+                for event in events:
+                    actions = _process_event_policies(event, _policies, db)
+                    if actions:
+                        cycle_actions += actions
+            except sqlite3.OperationalError as e:
+                if "database is locked" in str(e):
+                    cycle_had_db_error = True
+                else:
+                    log.error("Error processing events: %s", e)
+            except Exception as e:
+                log.error("Error processing events: %s", e)
 
-        # Heartbeat
+        # Health tracking
+        if cycle_had_db_error:
+            should_recover = health.record_db_lock_error()
+            if should_recover:
+                if health.recovery_attempts >= DB_LOCK_MAX_RECOVERY_ATTEMPTS:
+                    log.error(
+                        "DB lock recovery failed %d times. Exiting for systemd restart.",
+                        health.recovery_attempts,
+                    )
+                    health.write_health_file()
+                    db.close()
+                    lock_fh.close()
+                    sys.exit(1)
+
+                new_db = _attempt_db_recovery(db, health)
+                if new_db:
+                    db = new_db
+                else:
+                    # Recovery failed. Back off before retrying.
+                    log.warning(
+                        "DB recovery attempt %d failed. Backing off %ds.",
+                        health.recovery_attempts, DB_LOCK_RECOVERY_BACKOFF,
+                    )
+                    time.sleep(DB_LOCK_RECOVERY_BACKOFF)
+        else:
+            _hb_events += cycle_events
+            _hb_actions += cycle_actions
+            health.record_success(cycle_events, cycle_actions)
+
+        # Heartbeat (at INFO level so it always shows in logs)
         if now - last_heartbeat >= HEARTBEAT_INTERVAL:
-            log.debug(
-                "heartbeat: %d events processed, %d actions fired since last heartbeat",
-                _hb_events, _hb_actions,
+            log.info(
+                "heartbeat: pid=%d state=%s events=%d actions=%d db_locks=%d",
+                my_pid,
+                health.state,
+                _hb_events,
+                _hb_actions,
+                health.consecutive_db_lock_errors,
             )
             _hb_events = 0
             _hb_actions = 0
             last_heartbeat = now
+
+        # Write health file every 60 seconds
+        if now - last_health_write >= 60:
+            health.write_health_file()
+            last_health_write = now
 
         # Janitor
         if now - last_janitor > JANITOR_INTERVAL:
@@ -473,11 +864,13 @@ def run_daemon():
         time.sleep(POLL_INTERVAL)
 
     db.close()
-    pid_fh.close()
-    try:
-        os.remove(PID_FILE)
-    except OSError:
-        pass
+    lock_fh.close()
+    # Clean up PID and health files
+    for f in [PID_FILE, HEALTH_FILE]:
+        try:
+            os.remove(f)
+        except OSError:
+            pass
     log.info("hex-eventd stopped")
 
 if __name__ == "__main__":
