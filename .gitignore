@@ -19,6 +19,7 @@ watchdog-stderr.log
 watchdog-last-integrity
 watchdog-paused
 watchlist-state.json
+last-heartbeat.json
 
 # Meta-specific policies (kept locally, not pushed upstream)
 policies/be-pipeline/_config.yaml
