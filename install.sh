@@ -119,6 +119,36 @@ PLIST_EOF
         launchctl load "$DAEMON_PLIST" && echo "==> Daemon LaunchAgent loaded"
     fi
 
+    # ---- Watchdog plist ----
+    WATCHDOG_PLIST="$LAUNCH_AGENTS_DIR/com.mrap.hex-watchdog.plist"
+    cat > "$WATCHDOG_PLIST" << PLIST_EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mrap.hex-watchdog</string>
+    <key>StartInterval</key>
+    <integer>60</integer>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>${SCRIPT_DIR}/scripts/hex-watchdog.sh</string>
+    </array>
+    <key>StandardErrorPath</key>
+    <string>${SCRIPT_DIR}/watchdog-stderr.log</string>
+    <key>RunAtLoad</key>
+    <true/>
+</dict>
+</plist>
+PLIST_EOF
+
+    if launchctl list 2>/dev/null | grep -q "com.mrap.hex-watchdog"; then
+        echo "==> Watchdog LaunchAgent already loaded (skipping launchctl load)"
+    else
+        launchctl load "$WATCHDOG_PLIST" && echo "==> Watchdog LaunchAgent loaded"
+    fi
+
     # ---- fswatch plist (optional) ----
     if command -v fswatch >/dev/null 2>&1; then
         FSWATCH_BIN="$(command -v fswatch)"
