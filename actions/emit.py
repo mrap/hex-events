@@ -14,17 +14,29 @@ class EmitAction:
 
         event_type = params["event"]
         payload = params.get("payload", {})
+        tpl_ctx = {"event": event_payload}
+        if workflow_context:
+            tpl_ctx["workflow"] = workflow_context
         if isinstance(payload, str) and "{{" in payload:
             try:
                 from jinja2 import Template
-                tpl_ctx = {"event": event_payload}
-                if workflow_context:
-                    tpl_ctx["workflow"] = workflow_context
                 payload = json.loads(Template(payload).render(**tpl_ctx))
             except Exception as e:
                 return {"status": "error", "output": f"Template render failed: {e}"}
+        elif isinstance(payload, dict):
+            from jinja2 import Template
+            rendered = {}
+            for k, v in payload.items():
+                if isinstance(v, str) and "{{" in v:
+                    rendered[k] = Template(v).render(**tpl_ctx)
+                else:
+                    rendered[k] = v
+            payload = rendered
         delay = params.get("delay")
         cancel_group = params.get("cancel_group")
+        if isinstance(cancel_group, str) and "{{" in cancel_group:
+            from jinja2 import Template
+            cancel_group = Template(cancel_group).render(**tpl_ctx)
 
         if delay is not None:
             from db import parse_duration
