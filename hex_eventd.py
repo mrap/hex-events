@@ -478,6 +478,37 @@ def _dispatch_sub_actions(sub_actions, event_payload, action_result, db,
                     workflow_context=workflow_context)
 
 
+def _check_rule_ttl(rule, policy_name: str, db: EventsDB) -> bool:
+    """Return True if the rule is within TTL (or has no TTL). False = expired, skip rule.
+
+    TTL clock starts from the rule's first action_taken=1 entry in policy_eval_log.
+    If the rule has never fired, the clock hasn't started and the rule is allowed.
+    """
+    if not rule.ttl:
+        return True
+    try:
+        ttl_secs = parse_duration(rule.ttl)
+    except ValueError as e:
+        log.warning("TTL parse error for policy=%s rule=%s ttl=%r: %s — ignoring TTL",
+                    policy_name, rule.name, rule.ttl, e)
+        return True
+
+    first_fire_str = db.get_rule_first_fire(policy_name, rule.name)
+    if not first_fire_str:
+        return True  # never fired, TTL clock hasn't started
+
+    from datetime import timezone
+    first_fire = datetime.fromisoformat(first_fire_str).replace(tzinfo=timezone.utc)
+    age_secs = (datetime.now(timezone.utc) - first_fire).total_seconds()
+    if age_secs > ttl_secs:
+        log.info(
+            "TTL expired: policy=%s rule=%s ttl=%s age=%.0fs — skipping",
+            policy_name, rule.name, rule.ttl, age_secs,
+        )
+        return False
+    return True
+
+
 def _disable_policy_file(path: str):
     """Rewrite a policy YAML file with enabled: false."""
     with open(path) as f:
@@ -600,6 +631,24 @@ def _process_event_policies(event: dict, policies: list, db: "EventsDB") -> int:
         fired = False
         all_actions_succeeded = True
         for rule in matching_rules:
+            if rule.ttl and not _check_rule_ttl(rule, policy.name, db):
+                db.log_action(event_id, policy.name, "ttl_expired",
+                              json.dumps({"policy": policy.name, "rule": rule.name,
+                                          "ttl": rule.ttl}),
+                              "suppressed", f"TTL expired for rule {rule.name}")
+                eval_rows.append({
+                    "event_id": event_id,
+                    "policy_name": policy.name,
+                    "rule_name": rule.name,
+                    "matched": 1,
+                    "conditions_passed": None,
+                    "condition_details": None,
+                    "rate_limited": 0,
+                    "action_taken": 0,
+                    "evaluated_at": now_ts,
+                    "workflow": policy.workflow,
+                })
+                continue
             conditions_passed, cond_details = evaluate_conditions_with_details(
                 rule.conditions, payload, db=db
             )

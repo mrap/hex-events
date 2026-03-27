@@ -15,6 +15,7 @@ rules:
   - name: poll-availability
     trigger:
       event: timer.tick.5m
+    ttl: 7d
     conditions: []
     actions:
       - type: shell

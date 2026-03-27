@@ -46,6 +46,7 @@ class Rule:
     trigger_event: str  # supports glob patterns
     conditions: list[Condition] = field(default_factory=list)
     actions: list[Action] = field(default_factory=list)
+    ttl: Optional[str] = None  # e.g. "7d", "24h" — auto-skip rule after this age
 
     def matches_event_type(self, event_type: str) -> bool:
         return fnmatch.fnmatch(event_type, self.trigger_event)
@@ -125,7 +126,8 @@ def _parse_rule(data: dict, policy_name: str, idx: int) -> Rule:
     conditions = _parse_conditions(raw_conditions)
     actions = _parse_actions(data.get("actions", []))
     return Rule(name=name, trigger_event=trigger_event,
-                conditions=conditions, actions=actions)
+                conditions=conditions, actions=actions,
+                ttl=data.get("ttl"))
 
 
 def _infer_provides_requires(trigger_event: str, actions: list[Action]) -> tuple[dict, dict]:

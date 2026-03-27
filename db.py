@@ -301,6 +301,15 @@ class EventsDB:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    def get_rule_first_fire(self, policy_name: str, rule_name: str) -> str | None:
+        """Return the earliest evaluated_at timestamp where the rule took action, or None."""
+        row = self.conn.execute(
+            "SELECT MIN(evaluated_at) as first_fire FROM policy_eval_log "
+            "WHERE policy_name = ? AND rule_name = ? AND action_taken = 1",
+            (policy_name, rule_name),
+        ).fetchone()
+        return row["first_fire"] if row else None
+
     def count_policy_fires(self, policy_name: str) -> int:
         """Count distinct events where the policy took action (for max_fires tracking)."""
         row = self.conn.execute(

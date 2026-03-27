@@ -1,9 +1,11 @@
 """Policy validation for hex-events."""
+import re
 import yaml
 
 VALID_ACTION_TYPES = {"shell", "emit", "notify", "update-file"}
 VALID_CONDITION_OPS = {"eq", "neq", "contains", "gt", "lt", "gte", "lte", "glob", "regex"}
 VALID_LIFECYCLE_VALUES = {"persistent", "oneshot-delete", "oneshot-disable"}
+_DURATION_RE = re.compile(r"^\d+[smhd]$")
 
 
 def validate_policy(policy: dict, filename: str = "<unknown>") -> list[str]:
@@ -44,6 +46,14 @@ def validate_policy(policy: dict, filename: str = "<unknown>") -> list[str]:
 
         if not isinstance(rule.get("name"), str):
             errors.append(f"{prefix}: missing or invalid 'name' (must be a string)")
+
+        ttl = rule.get("ttl")
+        if ttl is not None:
+            if not isinstance(ttl, str) or not _DURATION_RE.match(ttl):
+                errors.append(
+                    f"{prefix}: invalid 'ttl' value {ttl!r} "
+                    f"(expected duration like '7d', '24h', '30m', '60s')"
+                )
 
         trigger = rule.get("trigger")
         if not isinstance(trigger, dict):
