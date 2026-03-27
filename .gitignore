@@ -14,3 +14,9 @@ hex_eventd.lock
 health.json
 logs/
 .stfolder/
+
+# Meta-specific policies (kept locally, not pushed upstream)
+policies/be-pipeline/_config.yaml
+policies/boi-lifecycle/boi-chain-dispatch.yaml
+policies/devserver-monitor/devserver-notify.yaml
+scripts/check-devserver.sh
