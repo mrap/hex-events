@@ -168,22 +168,34 @@ class EventsDB:
         return {r["event_id"]: r["recipe"] for r in rows}
 
     def count_events(self, event_type: str, seconds: int | None = None,
-                     hours: int | None = None) -> int:
+                     hours: int | None = None,
+                     payload_filter: tuple[str, str] | None = None) -> int:
         """Count events of event_type within a time window.
 
         Pass either seconds= or hours= (hours kept for backwards compat).
         If neither is provided, defaults to 1 hour.
+        Pass payload_filter=(field, value) to filter by a JSON payload field
+        using json_extract (e.g. payload_filter=("rule", "R-033")).
         """
         if seconds is None:
             if hours is not None:
                 seconds = hours * 3600
             else:
                 seconds = 3600
-        row = self.conn.execute(
-            "SELECT COUNT(*) as cnt FROM events WHERE event_type = ? "
-            "AND created_at >= datetime('now', ?)",
-            (event_type, f"-{seconds} seconds"),
-        ).fetchone()
+        if payload_filter:
+            field, value = payload_filter
+            row = self.conn.execute(
+                "SELECT COUNT(*) as cnt FROM events WHERE event_type = ? "
+                "AND created_at >= datetime('now', ?) "
+                "AND json_extract(payload, ?) = ?",
+                (event_type, f"-{seconds} seconds", f"$.{field}", value),
+            ).fetchone()
+        else:
+            row = self.conn.execute(
+                "SELECT COUNT(*) as cnt FROM events WHERE event_type = ? "
+                "AND created_at >= datetime('now', ?)",
+                (event_type, f"-{seconds} seconds"),
+            ).fetchone()
         return row["cnt"]
 
     def history(self, limit: int = 50, since_hours: int | None = None) -> list[dict]:

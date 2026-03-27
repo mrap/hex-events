@@ -6,7 +6,7 @@ from policy import Condition
 from db import parse_duration
 
 # Matches count(event_type, duration) where duration is like 10m, 1h, 2d, 30s, or bare int
-COUNT_RE = re.compile(r"^count\(([^,]+),\s*(\d+[smhd]?)\)$")
+COUNT_RE = re.compile(r"^count\(([^,]+),\s*(\d+[smhd]?)(?:,\s*(\w+)=([^)]+))?\)$")
 
 
 def evaluate_conditions(conditions: list[Condition], payload: dict, db) -> bool:
@@ -85,10 +85,13 @@ def _evaluate_one_with_actual(cond: Condition, payload: dict, db) -> tuple:
     m = COUNT_RE.match(cond.field)
     if m:
         event_type, duration_str = m.group(1), m.group(2)
+        filter_field, filter_value = m.group(3), m.group(4)
         if db is None:
             return None, False
         seconds = parse_duration(duration_str)
-        actual = db.count_events(event_type, seconds=seconds)
+        payload_filter = (filter_field, filter_value) if filter_field else None
+        actual = db.count_events(event_type, seconds=seconds,
+                                 payload_filter=payload_filter)
     else:
         actual = _resolve_field(cond.field, payload)
         if actual is None:

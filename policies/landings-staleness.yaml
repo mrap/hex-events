@@ -46,10 +46,10 @@ rules:
     trigger:
       event: policy.violation
     conditions:
-      - field: "count(policy.violation, 168h)"
+      - field: "count(policy.violation, 1h, rule=R-033)"
         op: gte
         value: 3
     actions:
       - type: shell
         command: |
-          osascript -e 'display notification "R-033 violation: landings not updated within 10 min of commit (3+ violations in 7d)" with title "hex-events"'
+          osascript -e 'display notification "R-033 violation: landings not updated within 10 min of commit (3+ in 1h)" with title "hex-events"'
