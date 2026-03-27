@@ -1,9 +1,13 @@
 # conditions.py
 """Condition evaluator for hex-events recipes."""
 import fnmatch
+import logging
 import re
+import subprocess
 from policy import Condition
 from db import parse_duration
+
+log = logging.getLogger("hex-events")
 
 # Matches count(event_type, duration) where duration is like 10m, 1h, 2d, 30s, or bare int
 COUNT_RE = re.compile(r"^count\(([^,]+),\s*(\d+[smhd]?)(?:,\s*(\w+)=([^)]+))?\)$")
@@ -33,23 +37,41 @@ def evaluate_conditions_with_details(
     details = []
     for cond in conditions:
         actual, passed = _evaluate_one_with_actual(cond, payload, db)
-        details.append({
-            "field": cond.field,
-            "op": cond.op,
-            "expected": cond.value,
-            "actual": actual,
-            "passed": passed,
-        })
+        if cond.type == "shell":
+            details.append({
+                "field": None,
+                "op": "shell",
+                "expected": cond.command,
+                "actual": actual,
+                "passed": passed,
+            })
+        else:
+            details.append({
+                "field": cond.field,
+                "op": cond.op,
+                "expected": cond.value,
+                "actual": actual,
+                "passed": passed,
+            })
         if not passed:
             # Short-circuit: mark remaining conditions as not evaluated
             for remaining in conditions[len(details):]:
-                details.append({
-                    "field": remaining.field,
-                    "op": remaining.op,
-                    "expected": remaining.value,
-                    "actual": None,
-                    "passed": "not_evaluated",
-                })
+                if remaining.type == "shell":
+                    details.append({
+                        "field": None,
+                        "op": "shell",
+                        "expected": remaining.command,
+                        "actual": None,
+                        "passed": "not_evaluated",
+                    })
+                else:
+                    details.append({
+                        "field": remaining.field,
+                        "op": remaining.op,
+                        "expected": remaining.value,
+                        "actual": None,
+                        "passed": "not_evaluated",
+                    })
             return False, details
 
     return True, details
@@ -79,8 +101,42 @@ def _resolve_field(field: str, payload: dict):
     return current
 
 
+def _evaluate_shell_condition(command: str, payload: dict) -> tuple:
+    """Evaluate a shell condition. Returns (exit_code_str, passed: bool)."""
+    # Render Jinja2 templates in the command
+    if "{{" in command:
+        try:
+            from jinja2 import Template
+            command = Template(command).render(event=payload)
+        except Exception as e:
+            log.warning("Shell condition template render failed: %s", e)
+            return None, False
+
+    log.debug("Shell condition: %s", command)
+    try:
+        result = subprocess.run(
+            command,
+            shell=True,
+            timeout=30,
+            capture_output=True,
+        )
+        passed = result.returncode == 0
+        log.debug("Shell condition exit=%d passed=%s cmd=%s", result.returncode, passed, command)
+        return result.returncode, passed
+    except subprocess.TimeoutExpired:
+        log.warning("Shell condition timed out: %s", command)
+        return None, False
+    except Exception as e:
+        log.warning("Shell condition failed: %s — %s", command, e)
+        return None, False
+
+
 def _evaluate_one_with_actual(cond: Condition, payload: dict, db) -> tuple:
     """Return (actual_value, passed: bool) for a single condition."""
+    # Handle shell conditions
+    if cond.type == "shell":
+        return _evaluate_shell_condition(cond.command, payload)
+
     # Check for count() function
     m = COUNT_RE.match(cond.field)
     if m:

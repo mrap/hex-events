@@ -24,9 +24,13 @@ log = logging.getLogger("hex-events")
 
 @dataclass
 class Condition:
-    field: str
-    op: str
-    value: str | int | float | bool
+    # For shell conditions (type: shell)
+    type: Optional[str] = None
+    command: Optional[str] = None
+    # For field-based conditions
+    field: Optional[str] = None
+    op: Optional[str] = None
+    value: Optional[str | int | float | bool] = None
 
 
 @dataclass
@@ -93,10 +97,13 @@ def record_fire(policy: Policy) -> None:
 # ---------------------------------------------------------------------------
 
 def _parse_conditions(raw: list) -> list[Condition]:
-    return [
-        Condition(field=c["field"], op=c["op"], value=c["value"])
-        for c in (raw or [])
-    ]
+    conditions = []
+    for c in (raw or []):
+        if c.get("type") == "shell":
+            conditions.append(Condition(type="shell", command=c["command"]))
+        else:
+            conditions.append(Condition(field=c["field"], op=c["op"], value=c["value"]))
+    return conditions
 
 
 def _parse_actions(raw: list) -> list[Action]:

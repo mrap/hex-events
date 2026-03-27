@@ -96,3 +96,51 @@ def test_count_with_mixed_conditions(db):
         Condition(field="count(alert.fired, 1h)", op="gte", value=2),
     ]
     assert evaluate_conditions(conds, {"status": "active"}, db=db) is True
+
+
+# ---------------------------------------------------------------------------
+# Shell conditions
+# ---------------------------------------------------------------------------
+
+def test_shell_condition_exit_0_passes():
+    """Shell command that exits 0 → condition passes."""
+    conds = [Condition(type="shell", command="true")]
+    assert evaluate_conditions(conds, {}, db=None) is True
+
+
+def test_shell_condition_exit_1_fails():
+    """Shell command that exits 1 → condition fails."""
+    conds = [Condition(type="shell", command="false")]
+    assert evaluate_conditions(conds, {}, db=None) is False
+
+
+def test_shell_condition_jinja2_template_rendered():
+    """Jinja2 {{ event.* }} templates in shell commands are rendered before execution."""
+    # Command uses event.status — if rendered, it becomes "true", which exits 0
+    conds = [Condition(type="shell", command="test '{{ event.status }}' = 'ok'")]
+    assert evaluate_conditions(conds, {"status": "ok"}, db=None) is True
+
+
+def test_shell_condition_timeout_fails_gracefully():
+    """Shell condition that times out → condition fails without crashing."""
+    import unittest.mock as mock
+    import subprocess
+    with mock.patch("conditions.subprocess.run", side_effect=subprocess.TimeoutExpired("sleep", 30)):
+        conds = [Condition(type="shell", command="sleep 9999")]
+        result = evaluate_conditions(conds, {}, db=None)
+    assert result is False
+
+
+def test_field_condition_regression_with_shell_present():
+    """Field-based conditions still work when shell conditions are also in use."""
+    conds = [
+        Condition(type="shell", command="true"),
+        Condition(field="status", op="eq", value="done"),
+    ]
+    assert evaluate_conditions(conds, {"status": "done"}, db=None) is True
+
+    conds2 = [
+        Condition(type="shell", command="true"),
+        Condition(field="status", op="eq", value="done"),
+    ]
+    assert evaluate_conditions(conds2, {"status": "failed"}, db=None) is False
