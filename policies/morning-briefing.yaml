@@ -27,12 +27,17 @@ rules:
         value: 0
     actions:
       - type: shell
+        # No retries: non-morning exit 1 is intentional, not a transient failure
+        retries: 0
         command: |
           HOUR=$(date +%H | sed 's/^0//')
+          # Morning window: 7am–9am inclusive. Outside this range, exit non-zero
+          # so on_success does NOT fire and briefing.delivered is NOT emitted.
+          # This preserves the 20h rate-limit gate for the actual morning run.
           if [ "${HOUR:-0}" -lt 7 ] || [ "${HOUR:-0}" -gt 9 ]; then
-            exit 0
+            exit 1
           fi
-          AGENT_DIR=/Users/mrap/mrap-hex bash ~/.hex-events/scripts/morning-briefing.sh
+          AGENT_DIR="${AGENT_DIR:-$HOME/mrap-hex}" bash ~/.hex-events/scripts/morning-briefing.sh
         on_success:
           - type: notify
             message: "{{ action.stdout }}"
