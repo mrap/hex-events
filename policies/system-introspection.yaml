@@ -65,7 +65,7 @@ rules:
           For items needing BOI dispatch (multi-step fixes, new features):
           - Write the recommendation but do NOT dispatch. Save for Mike to review.
 
-          Write the report to: $REPORT" --output-file "$REPORT" 2>/dev/null || true
+          Write the report to: $REPORT" > "$REPORT" 2>/dev/null || true
 
           # Emit completion event
           if [ -f "$REPORT" ]; then
