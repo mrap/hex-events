@@ -2,8 +2,8 @@
 import os
 import re
 import tempfile
-from jinja2 import Template
 from actions import register
+from actions.render import render_templates
 
 @register("update-file")
 class UpdateFileAction:
@@ -12,17 +12,11 @@ class UpdateFileAction:
         target = params["target"]
         pattern = params["pattern"]
         replace = params["replace"]
-        # Build template context
         tpl_ctx = {"event": event_payload}
         if workflow_context:
             tpl_ctx["workflow"] = workflow_context
-        # Render templates
-        if "{{" in target:
-            target = Template(target).render(**tpl_ctx)
-        if "{{" in pattern:
-            pattern = Template(pattern).render(**tpl_ctx)
-        if "{{" in replace:
-            replace = Template(replace).render(**tpl_ctx)
+        rendered = render_templates({"target": target, "pattern": pattern, "replace": replace}, tpl_ctx)
+        target, pattern, replace = rendered["target"], rendered["pattern"], rendered["replace"]
         tmp_path = None
         try:
             with open(target) as f:

@@ -1,7 +1,7 @@
 """Shell command action plugin."""
 import subprocess
-from jinja2 import Template
 from actions import register
+from actions.render import render_templates
 
 @register("shell")
 class ShellAction:
@@ -9,12 +9,10 @@ class ShellAction:
             workflow_context=None) -> dict:
         command = params["command"]
         timeout = int(params.get("timeout", 60))
-        # Render Jinja2 templates in command
-        if "{{" in command:
-            tpl_ctx = {"event": event_payload}
-            if workflow_context:
-                tpl_ctx["workflow"] = workflow_context
-            command = Template(command).render(**tpl_ctx)
+        tpl_ctx = {"event": event_payload}
+        if workflow_context:
+            tpl_ctx["workflow"] = workflow_context
+        command = render_templates({"command": command}, tpl_ctx)["command"]
         try:
             result = subprocess.run(
                 command, shell=True, capture_output=True, text=True, timeout=timeout,

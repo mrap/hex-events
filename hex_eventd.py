@@ -10,6 +10,8 @@ import subprocess
 import sqlite3
 import sys
 import time
+import warnings
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
@@ -45,6 +47,10 @@ DB_LOCK_RECOVERY_BACKOFF = 30       # seconds to wait after recovery attempt
 DB_LOCK_MAX_RECOVERY_ATTEMPTS = 3   # max recovery attempts before giving up and restarting
 
 log = logging.getLogger("hex-events")
+
+# Module-level policy reload cache: {filepath: mtime} and the cached list
+_policy_mtimes: dict = {}
+_policy_list_cache: list = []
 
 
 # ---------------------------------------------------------------------------
@@ -445,8 +451,8 @@ def _dispatch_sub_actions(sub_actions, event_payload, action_result, db,
     """Dispatch on_success or on_failure sub-actions. Called exactly once."""
     if not sub_actions:
         return
-    from jinja2 import Template
     from actions import get_action_handler
+    from actions.render import render_templates
 
     action_ctx = action_result.get("_action_result", action_result)
     tpl_ctx = {"event": event_payload, "action": action_ctx, "now": datetime.utcnow()}
@@ -458,22 +464,8 @@ def _dispatch_sub_actions(sub_actions, event_payload, action_result, db,
         handler = get_action_handler(atype)
         if not handler:
             continue
-        params = {}
-        for k, v in raw.items():
-            if k == "type":
-                continue
-            if isinstance(v, str) and "{{" in v:
-                params[k] = Template(v).render(**tpl_ctx)
-            elif isinstance(v, dict):
-                rendered = {}
-                for dk, dv in v.items():
-                    if isinstance(dv, str) and "{{" in dv:
-                        rendered[dk] = Template(dv).render(**tpl_ctx)
-                    else:
-                        rendered[dk] = dv
-                params[k] = rendered
-            else:
-                params[k] = v
+        raw_params = {k: v for k, v in raw.items() if k != "type"}
+        params = render_templates(raw_params, tpl_ctx)
         handler.run(params, event_payload=event_payload, db=db,
                     workflow_context=workflow_context)
 
@@ -546,6 +538,11 @@ def _handle_policy_lifecycle(policy, db: EventsDB):
 
 
 def process_event(event: dict, policies: list[Recipe], db: EventsDB):
+    warnings.warn(
+        "process_event() is deprecated; the daemon uses _process_event_policies() directly.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     event_type = event["event_type"]
     event_id = event["id"]
     try:
@@ -568,6 +565,68 @@ def process_event(event: dict, policies: list[Recipe], db: EventsDB):
 
     recipe_column = ",".join(matched_names) if matched_names else None
     db.mark_processed(event_id, recipe_column)
+
+def _make_eval_row(event_id, policy_name, rule_name, now_ts, **overrides) -> dict:
+    """Factory for policy eval log rows. Callers pass keyword overrides for non-default fields."""
+    row = {
+        "event_id": event_id,
+        "policy_name": policy_name,
+        "rule_name": rule_name,
+        "matched": 1,
+        "conditions_passed": None,
+        "condition_details": None,
+        "rate_limited": 0,
+        "action_taken": 0,
+        "evaluated_at": now_ts,
+        "workflow": None,
+    }
+    row.update(overrides)
+    return row
+
+
+def _evaluate_rule(rule, policy, event_id, payload, db, now_ts) -> dict:
+    """Evaluate a single rule: TTL check then condition evaluation.
+
+    Returns an eval_row dict with action_taken=1 if conditions passed, 0 otherwise.
+    """
+    if rule.ttl and not _check_rule_ttl(rule, policy.name, db):
+        db.log_action(event_id, policy.name, "ttl_expired",
+                      json.dumps({"policy": policy.name, "rule": rule.name,
+                                  "ttl": rule.ttl}),
+                      "suppressed", f"TTL expired for rule {rule.name}")
+        return _make_eval_row(event_id, policy.name, rule.name, now_ts,
+                              workflow=policy.workflow)
+
+    conditions_passed, cond_details = evaluate_conditions_with_details(
+        rule.conditions, payload, db=db
+    )
+    return _make_eval_row(
+        event_id, policy.name, rule.name, now_ts,
+        conditions_passed=1 if conditions_passed else 0,
+        condition_details=json.dumps(cond_details) if cond_details else None,
+        action_taken=1 if conditions_passed else 0,
+        workflow=policy.workflow,
+    )
+
+
+def _fire_rule_actions(rule, policy, event_id, payload, db) -> tuple:
+    """Dispatch all actions for a rule whose conditions have passed.
+
+    Returns (actions_fired, all_succeeded).
+    """
+    wf_ctx = None
+    if policy.workflow:
+        wf_ctx = {"name": policy.workflow, "config": policy.workflow_config}
+    actions_fired = 0
+    all_succeeded = True
+    for action in rule.actions:
+        result = run_action_with_retry(action, event_id, rule.name,
+                                       payload, db, workflow_context=wf_ctx)
+        actions_fired += 1
+        if result.get("status") == "error":
+            all_succeeded = False
+    return actions_fired, all_succeeded
+
 
 def _process_event_policies(event: dict, policies: list, db: "EventsDB") -> int:
     """Process an event against Policy objects with per-policy rate limiting.
@@ -615,71 +674,22 @@ def _process_event_policies(event: dict, policies: list, db: "EventsDB") -> int:
                         policy.name, event_type, fires_in_window, max_fires, window_str)
             db.log_action(event_id, policy.name, "rate_limited", detail, "suppressed", err_msg)
             for rule in matching_rules:
-                eval_rows.append({
-                    "event_id": event_id,
-                    "policy_name": policy.name,
-                    "rule_name": rule.name,
-                    "matched": 1,
-                    "conditions_passed": None,
-                    "condition_details": None,
-                    "rate_limited": 1,
-                    "action_taken": 0,
-                    "evaluated_at": now_ts,
-                    "workflow": policy.workflow,
-                })
+                eval_rows.append(_make_eval_row(event_id, policy.name, rule.name, now_ts,
+                                                rate_limited=1, workflow=policy.workflow))
             continue
+
         fired = False
         all_actions_succeeded = True
         for rule in matching_rules:
-            if rule.ttl and not _check_rule_ttl(rule, policy.name, db):
-                db.log_action(event_id, policy.name, "ttl_expired",
-                              json.dumps({"policy": policy.name, "rule": rule.name,
-                                          "ttl": rule.ttl}),
-                              "suppressed", f"TTL expired for rule {rule.name}")
-                eval_rows.append({
-                    "event_id": event_id,
-                    "policy_name": policy.name,
-                    "rule_name": rule.name,
-                    "matched": 1,
-                    "conditions_passed": None,
-                    "condition_details": None,
-                    "rate_limited": 0,
-                    "action_taken": 0,
-                    "evaluated_at": now_ts,
-                    "workflow": policy.workflow,
-                })
-                continue
-            conditions_passed, cond_details = evaluate_conditions_with_details(
-                rule.conditions, payload, db=db
-            )
-            action_taken = 0
-            if conditions_passed:
+            eval_row = _evaluate_rule(rule, policy, event_id, payload, db, now_ts)
+            eval_rows.append(eval_row)
+            if eval_row["action_taken"]:
                 matched_names.append(rule.name)
                 fired = True
-                action_taken = 1
-                wf_ctx = None
-                if policy.workflow:
-                    wf_ctx = {"name": policy.workflow,
-                              "config": policy.workflow_config}
-                for action in rule.actions:
-                    result = run_action_with_retry(action, event_id, rule.name,
-                                          payload, db,
-                                          workflow_context=wf_ctx)
-                    actions_dispatched += 1
-                    if result.get("status") == "error":
-                        all_actions_succeeded = False
-            eval_rows.append({
-                "event_id": event_id,
-                "policy_name": policy.name,
-                "rule_name": rule.name,
-                "matched": 1,
-                "conditions_passed": 1 if conditions_passed else 0,
-                "condition_details": json.dumps(cond_details) if cond_details else None,
-                "rate_limited": 0,
-                "action_taken": action_taken,
-                "evaluated_at": now_ts,
-                "workflow": policy.workflow,
-            })
+                count, ok = _fire_rule_actions(rule, policy, event_id, payload, db)
+                actions_dispatched += count
+                if not ok:
+                    all_actions_succeeded = False
         if fired:
             record_fire(policy)
             if all_actions_succeeded:
@@ -696,11 +706,38 @@ def _process_event_policies(event: dict, policies: list, db: "EventsDB") -> int:
     return actions_dispatched
 
 
+def _collect_policy_mtimes(policies_dir: str) -> dict:
+    """Return {filepath: mtime} for all YAML files under policies_dir."""
+    mtimes = {}
+    if not os.path.isdir(policies_dir):
+        return mtimes
+    for entry in os.listdir(policies_dir):
+        entry_path = os.path.join(policies_dir, entry)
+        if os.path.isfile(entry_path) and entry.endswith((".yaml", ".yml")):
+            mtimes[entry_path] = os.path.getmtime(entry_path)
+        elif os.path.isdir(entry_path):
+            for fname in os.listdir(entry_path):
+                fpath = os.path.join(entry_path, fname)
+                if os.path.isfile(fpath) and fname.endswith((".yaml", ".yml")):
+                    mtimes[fpath] = os.path.getmtime(fpath)
+    return mtimes
+
+
 def _load_policies_validated(policies_dir: str) -> list:
     """Load policies from directory, validate each, skip invalid ones.
 
+    Uses mtime-based caching: if no YAML files have changed since the last
+    load, returns the cached policy list immediately (avoids N file reads and
+    YAML parses on every tick).
+
     Logs errors to both daemon.log and stderr. Prints a startup summary.
     """
+    global _policy_mtimes, _policy_list_cache
+
+    current_mtimes = _collect_policy_mtimes(policies_dir)
+    if current_mtimes == _policy_mtimes:
+        return _policy_list_cache
+
     skipped = [0]
 
     def on_invalid(fpath, errors):
@@ -717,7 +754,25 @@ def _load_policies_validated(policies_dir: str) -> list:
     log.info(summary)
     if n_skipped > 0:
         print(summary, file=sys.stderr)
+
+    _policy_mtimes = current_mtimes
+    _policy_list_cache = policies
     return policies
+
+
+class _DatabaseBusyError(Exception):
+    """Raised by _db_op when sqlite3 reports 'database is locked'."""
+
+
+@contextmanager
+def _db_op(label: str):
+    """Context manager that converts 'database is locked' errors into _DatabaseBusyError."""
+    try:
+        yield
+    except sqlite3.OperationalError as e:
+        if "database is locked" in str(e):
+            raise _DatabaseBusyError() from e
+        raise
 
 
 def _setup_logging():
@@ -812,24 +867,20 @@ def run_daemon():
 
         # Tick the scheduler -- emits timer events for due cron windows
         try:
-            scheduler.tick(db, now=datetime.utcnow())
-        except sqlite3.OperationalError as e:
-            if "database is locked" in str(e):
-                cycle_had_db_error = True
-            else:
-                log.error("Scheduler tick error: %s", e)
+            with _db_op("scheduler tick"):
+                scheduler.tick(db, now=datetime.utcnow())
+        except _DatabaseBusyError:
+            cycle_had_db_error = True
         except Exception as e:
             log.error("Scheduler tick error: %s", e)
 
         # Drain deferred events whose fire_at has passed
         if not cycle_had_db_error:
             try:
-                drain_deferred(db)
-            except sqlite3.OperationalError as e:
-                if "database is locked" in str(e):
-                    cycle_had_db_error = True
-                else:
-                    log.error("Error draining deferred events: %s", e)
+                with _db_op("drain deferred"):
+                    drain_deferred(db)
+            except _DatabaseBusyError:
+                cycle_had_db_error = True
             except Exception as e:
                 log.error("Error draining deferred events: %s", e)
 
@@ -838,17 +889,15 @@ def run_daemon():
         cycle_actions = 0
         if not cycle_had_db_error:
             try:
-                events = db.get_unprocessed()
-                cycle_events = len(events)
-                for event in events:
-                    actions = _process_event_policies(event, _policies, db)
-                    if actions:
-                        cycle_actions += actions
-            except sqlite3.OperationalError as e:
-                if "database is locked" in str(e):
-                    cycle_had_db_error = True
-                else:
-                    log.error("Error processing events: %s", e)
+                with _db_op("process events"):
+                    events = db.get_unprocessed()
+                    cycle_events = len(events)
+                    for event in events:
+                        actions = _process_event_policies(event, _policies, db)
+                        if actions:
+                            cycle_actions += actions
+            except _DatabaseBusyError:
+                cycle_had_db_error = True
             except Exception as e:
                 log.error("Error processing events: %s", e)
 

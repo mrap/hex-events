@@ -1,19 +1,18 @@
 """Notification action (delegates to hex-notify.sh)."""
 import os
 import subprocess
-from jinja2 import Template
 from actions import register
+from actions.render import render_templates
 
 @register("notify")
 class NotifyAction:
     def run(self, params: dict, event_payload: dict, db=None,
             workflow_context=None) -> dict:
         message = params["message"]
-        if "{{" in message:
-            tpl_ctx = {"event": event_payload}
-            if workflow_context:
-                tpl_ctx["workflow"] = workflow_context
-            message = Template(message).render(**tpl_ctx)
+        tpl_ctx = {"event": event_payload}
+        if workflow_context:
+            tpl_ctx["workflow"] = workflow_context
+        message = render_templates({"message": message}, tpl_ctx)["message"]
         try:
             result = subprocess.run(
                 ["bash", os.path.expanduser("~/.claude/scripts/hex-notify.sh"), message],

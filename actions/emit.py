@@ -3,6 +3,7 @@ import json
 from datetime import datetime, timedelta
 
 from actions import register
+from actions.render import render_templates
 
 
 @register("emit")
@@ -24,19 +25,11 @@ class EmitAction:
             except Exception as e:
                 return {"status": "error", "output": f"Template render failed: {e}"}
         elif isinstance(payload, dict):
-            from jinja2 import Template
-            rendered = {}
-            for k, v in payload.items():
-                if isinstance(v, str) and "{{" in v:
-                    rendered[k] = Template(v).render(**tpl_ctx)
-                else:
-                    rendered[k] = v
-            payload = rendered
+            payload = render_templates(payload, tpl_ctx)
         delay = params.get("delay")
         cancel_group = params.get("cancel_group")
         if isinstance(cancel_group, str) and "{{" in cancel_group:
-            from jinja2 import Template
-            cancel_group = Template(cancel_group).render(**tpl_ctx)
+            cancel_group = render_templates({"cancel_group": cancel_group}, tpl_ctx)["cancel_group"]
 
         if delay is not None:
             from db import parse_duration
