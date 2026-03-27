@@ -1,0 +1,86 @@
+name: system-introspection
+description: >
+  Nightly self-improvement loop. Audits system health, scans logs for errors,
+  checks repo hygiene, identifies friction patterns, and dispatches fixes.
+  This is hex watching itself and generating work.
+
+standing_orders:
+  - "13"
+
+requires:
+  events:
+    - timer.tick.daily
+
+provides:
+  events:
+    - introspection.completed
+    - introspection.issues-found
+
+rate_limit:
+  max_fires: 1
+  window: 20h
+
+rules:
+  - name: nightly-introspection
+    trigger:
+      event: timer.tick.daily
+    actions:
+      - type: shell
+        command: |
+          AGENT_DIR="${AGENT_DIR:-$HOME/mrap-hex}"
+          REPORT_DIR="$AGENT_DIR/raw/research/introspection"
+          mkdir -p "$REPORT_DIR"
+          DATE=$(date +%Y-%m-%d)
+          REPORT="$REPORT_DIR/$DATE.md"
+
+          claude -p "You are hex's system introspection agent. Perform a thorough nightly audit and write a report.
+
+          ## Audit Checklist
+
+          1. **Log Audit**: Read the last 100 lines of ~/.boi/logs/ (most recent 3 iteration logs) and ~/github.com/mrap/hex-events/daemon.log. Flag errors, crashes, recurring warnings.
+
+          2. **Repo Hygiene**: For each repo in ~/github.com/mrap/ (hex, hex-core, hex-ui, hex-events, boi, zwerk, ai-native-env, polymarket-trader, visual-bench, dca), run git status. Flag uncommitted changes, untracked files that should be committed or gitignored.
+
+          3. **Daemon Health**: Run 'bash ~/mrap-hex/.claude/scripts/hex-daemons.sh status' and 'bash ~/.boi/boi status 2>/dev/null | head -15'. Flag any daemons down or specs stuck.
+
+          4. **Research Feed Health**: Check ~/mrap-hex/raw/research/bookmarks/ and ~/mrap-hex/raw/research/scout/ for recent output. Flag silent feeds.
+
+          5. **Stale Work Detection**: Check todo.md for items marked stale >30 days. Check BOI queue for specs that failed 3+ times.
+
+          6. **Generative Layer**: Check ~/mrap-hex/raw/research/generative-layer/state/cycle-log.jsonl for recent runs. Flag if the daily cycle hasn't run.
+
+          ## Output Format
+
+          Write a markdown report to $REPORT with:
+          - Date and timestamp
+          - Issues found (CRITICAL / WARNING / INFO)
+          - Auto-fixable items (list what you fixed)
+          - Recommendations for Mike (things that need human decision)
+          - System health score (1-10)
+
+          For auto-fixable items (missing gitignore entries, non-executable scripts, obvious cleanup):
+          - Fix them directly
+          - Log what you fixed in the report
+
+          For items needing BOI dispatch (multi-step fixes, new features):
+          - Write the recommendation but do NOT dispatch. Save for Mike to review.
+
+          Write the report to: $REPORT" --output-file "$REPORT" 2>/dev/null || true
+
+          # Emit completion event
+          if [ -f "$REPORT" ]; then
+            ISSUES=$(grep -c "CRITICAL\|WARNING" "$REPORT" 2>/dev/null || echo 0)
+            echo "{\"report\": \"$REPORT\", \"issues\": $ISSUES, \"date\": \"$DATE\"}"
+          fi
+        timeout: 600
+        on_success:
+          - type: emit
+            event: introspection.completed
+            payload:
+              date: "{{ now.strftime('%Y-%m-%d') }}"
+        on_failure:
+          - type: emit
+            event: introspection.completed
+            payload:
+              date: "{{ now.strftime('%Y-%m-%d') }}"
+              error: "introspection failed"
