@@ -211,6 +211,31 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Step 8: Install hex-event skill for AI agents
+# ---------------------------------------------------------------------------
+SKILL_SRC="$SCRIPT_DIR/skills/hex-event/SKILL.md"
+
+if [ -f "$SKILL_SRC" ]; then
+    # Claude Code
+    if [ -d "$HOME/.claude/skills" ]; then
+        mkdir -p "$HOME/.claude/skills/hex-event"
+        cp "$SKILL_SRC" "$HOME/.claude/skills/hex-event/SKILL.md"
+        echo "==> hex-event skill installed (~/.claude/skills/hex-event/SKILL.md)"
+    fi
+    # Codex
+    if [ -d "$HOME/.agents/skills" ]; then
+        mkdir -p "$HOME/.agents/skills/hex-event"
+        cp "$SKILL_SRC" "$HOME/.agents/skills/hex-event/SKILL.md"
+        echo "==> hex-event skill installed (~/.agents/skills/hex-event/SKILL.md)"
+    fi
+    if [ ! -d "$HOME/.claude/skills" ] && [ ! -d "$HOME/.agents/skills" ]; then
+        echo "==> hex-event skill: no agent skills directory found (skipping)"
+    fi
+else
+    echo "==> hex-event skill source not found at $SKILL_SRC (skipping)"
+fi
+
+# ---------------------------------------------------------------------------
 # Done
 # ---------------------------------------------------------------------------
 echo ""
