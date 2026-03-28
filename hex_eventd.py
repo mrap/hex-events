@@ -46,6 +46,9 @@ DB_LOCK_CONSECUTIVE_THRESHOLD = 10   # consecutive lock errors before recovery a
 DB_LOCK_RECOVERY_BACKOFF = 30       # seconds to wait after recovery attempt
 DB_LOCK_MAX_RECOVERY_ATTEMPTS = 3   # max recovery attempts before giving up and restarting
 
+# Stall detection: warn if no events processed in this many seconds while events are pending
+STALL_THRESHOLD_SECONDS = 300  # 5 minutes
+
 log = logging.getLogger("hex-events")
 
 # Module-level policy reload cache: {filepath: mtime} and the cached list
@@ -162,14 +165,45 @@ def _acquire_singleton_lock():
     Writes PID to the PID file separately for diagnostics.
     Exits with code 0 if another instance already holds the lock.
     """
-    os.makedirs(BASE_DIR, exist_ok=True)
-    lock_fh = open(LOCK_FILE, "w")
     try:
-        fcntl.flock(lock_fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        print("hex-eventd: another instance is already running, exiting", file=sys.stderr)
-        lock_fh.close()
-        sys.exit(0)
+        os.makedirs(BASE_DIR, exist_ok=True)
+    except FileExistsError:
+        print(
+            f"hex-eventd: {BASE_DIR} exists but is not a directory; cannot start",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    def _try_acquire(retry=True):
+        lock_fh = open(LOCK_FILE, "w")
+        try:
+            fcntl.flock(lock_fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return lock_fh
+        except OSError:
+            lock_fh.close()
+            if retry:
+                # If the holding process is stopped (T state), it will never release
+                # the lock on its own — kill it and retry once.
+                try:
+                    pid = int(open(PID_FILE).read().strip())
+                    state = subprocess.check_output(
+                        ["ps", "-p", str(pid), "-o", "state="], text=True
+                    ).strip()
+                    if state.startswith("T"):
+                        os.kill(pid, signal.SIGKILL)
+                        time.sleep(0.5)
+                        for stale in (LOCK_FILE, PID_FILE):
+                            try:
+                                os.unlink(stale)
+                            except OSError:
+                                pass
+                        return _try_acquire(retry=False)
+                except Exception:
+                    pass
+            print("hex-eventd: another instance is already running, exiting", file=sys.stderr)
+            sys.exit(0)
+
+    lock_fh = _try_acquire()
     lock_fh.write(str(os.getpid()))
     lock_fh.flush()
 
@@ -192,10 +226,12 @@ class HealthMonitor:
         self.total_db_lock_errors = 0
         self.last_successful_cycle = time.time()
         self.last_event_processed = 0.0
+        self.daemon_start = time.time()
         self.recovery_attempts = 0
         self.events_processed_total = 0
         self.actions_fired_total = 0
         self.state = "starting"  # starting, healthy, degraded, recovering
+        self.processing_stalled = False
 
     def record_success(self, events_count: int = 0, actions_count: int = 0):
         """Record a successful event loop cycle."""
@@ -231,8 +267,13 @@ class HealthMonitor:
 
         return False
 
-    def write_health_file(self):
+    def write_health_file(self, unprocessed_count: int = -1):
         """Write current health status to a JSON file for external monitoring."""
+        lep = (
+            datetime.utcfromtimestamp(self.last_event_processed).isoformat()
+            if self.last_event_processed > 0
+            else None
+        )
         data = {
             "pid": os.getpid(),
             "state": self.state,
@@ -244,6 +285,9 @@ class HealthMonitor:
             "recovery_attempts": self.recovery_attempts,
             "events_processed_total": self.events_processed_total,
             "actions_fired_total": self.actions_fired_total,
+            "last_event_processed": lep,
+            "processing_stalled": self.processing_stalled,
+            "unprocessed_count": unprocessed_count,
         }
         tmp = HEALTH_FILE + ".tmp"
         try:
@@ -847,7 +891,6 @@ def run_daemon():
     _hb_actions = 0
     _policies = []
     cycle_had_db_error = False
-
     log.info("hex-eventd ready (pid=%d)", my_pid)
     health.state = "healthy"
 
@@ -944,9 +987,24 @@ def run_daemon():
             _hb_actions = 0
             last_heartbeat = now
 
-        # Write health file every 60 seconds
+        # Write health file every 60 seconds; check for processing stall
         if now - last_health_write >= 60:
-            health.write_health_file()
+            try:
+                unprocessed_count = db.count_unprocessed()
+            except Exception:
+                unprocessed_count = -1
+            ref_time = health.last_event_processed if health.last_event_processed > 0 else health.daemon_start
+            health.processing_stalled = (
+                unprocessed_count > 0
+                and (now - ref_time) > STALL_THRESHOLD_SECONDS
+            )
+            if health.processing_stalled:
+                log.warning(
+                    "Processing stalled: %d unprocessed events, last processed %.0fs ago",
+                    unprocessed_count,
+                    now - ref_time,
+                )
+            health.write_health_file(unprocessed_count=unprocessed_count)
             last_health_write = now
 
         # Janitor

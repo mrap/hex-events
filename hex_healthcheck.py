@@ -126,6 +126,9 @@ def check():
     secs_since = data.get("seconds_since_success", float("inf"))
     db_locks = data.get("consecutive_db_lock_errors", 0)
     pid = data.get("pid", 0)
+    processing_stalled = data.get("processing_stalled", False)
+    last_event_processed = data.get("last_event_processed")
+    unprocessed_count = data.get("unprocessed_count", -1)
 
     # Check if the PID is still alive
     if pid:
@@ -146,6 +149,12 @@ def check():
 
     if state == "degraded":
         print(f"DEGRADED: {db_locks} consecutive DB lock errors. Recovery in progress.")
+        return 1
+
+    if processing_stalled:
+        unprocessed_str = f", {unprocessed_count} unprocessed" if unprocessed_count >= 0 else ""
+        last_str = f", last processed: {last_event_processed}" if last_event_processed else ""
+        print(f"STALLED: daemon alive but not processing events{unprocessed_str}{last_str}")
         return 1
 
     print(

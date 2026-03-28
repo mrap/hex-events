@@ -133,6 +133,12 @@ class EventsDB:
         ).fetchall()
         return [dict(r) for r in rows]
 
+    def count_unprocessed(self) -> int:
+        row = self.conn.execute(
+            "SELECT COUNT(*) as cnt FROM events WHERE processed_at IS NULL"
+        ).fetchone()
+        return row["cnt"]
+
     def mark_processed(self, event_id: int, recipe: str | None = None):
         self.conn.execute(
             "UPDATE events SET processed_at = datetime('now'), recipe = ? WHERE id = ?",
