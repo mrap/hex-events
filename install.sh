@@ -109,6 +109,13 @@ elif [ "$OS" = "Darwin" ]; then
     <string>${SCRIPT_DIR}/daemon.log</string>
     <key>StandardErrorPath</key>
     <string>${SCRIPT_DIR}/daemon.log</string>
+    <key>ProcessType</key>
+    <string>Interactive</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
 </dict>
 </plist>
 PLIST_EOF
@@ -189,6 +196,8 @@ PLIST_EOF
     <string>${SCRIPT_DIR}/fswatch.log</string>
     <key>StandardErrorPath</key>
     <string>${SCRIPT_DIR}/fswatch.log</string>
+    <key>ProcessType</key>
+    <string>Interactive</string>
 </dict>
 </plist>
 PLIST_EOF

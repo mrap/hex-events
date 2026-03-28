@@ -118,9 +118,10 @@ def _parse_actions(raw: list) -> list[Action]:
 
 def _parse_rule(data: dict, policy_name: str, idx: int) -> Rule:
     name = data.get("name") or f"{policy_name}.rule-{idx}"
-    trigger_event = data["trigger"]["event"]
-    # Support both plural 'conditions' (list) and singular 'condition' (dict)
-    raw_conditions = data.get("conditions") or []
+    trigger = data["trigger"]
+    trigger_event = trigger["event"]
+    # Support conditions at rule level OR nested under trigger:
+    raw_conditions = data.get("conditions") or trigger.get("conditions") or []
     if not raw_conditions and "condition" in data:
         raw_conditions = [data["condition"]]
     conditions = _parse_conditions(raw_conditions)
