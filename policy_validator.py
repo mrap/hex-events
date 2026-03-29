@@ -8,6 +8,28 @@ VALID_LIFECYCLE_VALUES = {"persistent", "oneshot-delete", "oneshot-disable"}
 _DURATION_RE = re.compile(r"^\d+[smhd]$")
 
 
+def _validate_condition_dict(condition: dict, prefix: str) -> list[str]:
+    """Validate a single condition dict. Returns list of error strings."""
+    errors = []
+    cond_type = condition.get("type")
+    if cond_type == "shell":
+        if not isinstance(condition.get("command"), str):
+            errors.append(f"{prefix}: shell condition missing 'command' (must be a string)")
+    else:
+        # field-based condition
+        if not isinstance(condition.get("field"), str):
+            errors.append(f"{prefix}: condition missing 'field' (must be a string)")
+        op = condition.get("op")
+        if op not in VALID_CONDITION_OPS:
+            errors.append(
+                f"{prefix}: condition.op '{op}' is not valid "
+                f"(expected: {', '.join(sorted(VALID_CONDITION_OPS))})"
+            )
+        if "value" not in condition:
+            errors.append(f"{prefix}: condition missing 'value'")
+    return errors
+
+
 def validate_policy(policy: dict, filename: str = "<unknown>") -> list[str]:
     """Validate a policy dict against the hex-events schema.
     Returns list of error strings. Empty list = valid."""
@@ -88,16 +110,32 @@ def validate_policy(policy: dict, filename: str = "<unknown>") -> list[str]:
             if not isinstance(condition, dict):
                 errors.append(f"{prefix}: 'condition' must be a dict")
             else:
-                if not isinstance(condition.get("field"), str):
-                    errors.append(f"{prefix}: condition missing 'field' (must be a string)")
-                op = condition.get("op")
-                if op not in VALID_CONDITION_OPS:
-                    errors.append(
-                        f"{prefix}: condition.op '{op}' is not valid "
-                        f"(expected: {', '.join(sorted(VALID_CONDITION_OPS))})"
-                    )
-                if "value" not in condition:
-                    errors.append(f"{prefix}: condition missing 'value'")
+                errors.extend(_validate_condition_dict(condition, f"{prefix} condition"))
+
+        conditions = rule.get("conditions")
+        if conditions is not None:
+            if not isinstance(conditions, list):
+                errors.append(f"{prefix}: 'conditions' must be a list")
+            else:
+                for i, cond in enumerate(conditions):
+                    cond_prefix = f"{prefix} conditions[{i}]"
+                    if not isinstance(cond, dict):
+                        errors.append(f"{cond_prefix}: must be a dict")
+                    else:
+                        errors.extend(_validate_condition_dict(cond, cond_prefix))
+
+        if isinstance(trigger, dict):
+            trigger_conditions = trigger.get("conditions")
+            if trigger_conditions is not None:
+                if not isinstance(trigger_conditions, list):
+                    errors.append(f"{prefix}: trigger 'conditions' must be a list")
+                else:
+                    for i, cond in enumerate(trigger_conditions):
+                        cond_prefix = f"{prefix} trigger.conditions[{i}]"
+                        if not isinstance(cond, dict):
+                            errors.append(f"{cond_prefix}: must be a dict")
+                        else:
+                            errors.extend(_validate_condition_dict(cond, cond_prefix))
 
     return errors
 

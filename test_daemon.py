@@ -86,7 +86,7 @@ def test_process_event_emit_action(db):
         "SELECT * FROM events WHERE event_type='chained.event'"
     ).fetchone()
     assert row is not None
-    assert row["source"] == "recipe-emit"
+    assert row["source"] == "policy-emit"
 
 def test_process_event_condition_blocks(db):
     recipes = [make_recipe("r1", "test.event",

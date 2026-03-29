@@ -556,7 +556,14 @@ def cmd_validate(args):
 
     # Determine which files to validate
     if hasattr(args, "file") and args.file:
-        files = [args.file]
+        if os.path.isdir(args.file):
+            files = sorted(
+                os.path.join(args.file, f)
+                for f in os.listdir(args.file)
+                if f.endswith(".yaml") or f.endswith(".yml")
+            )
+        else:
+            files = [args.file]
     else:
         policies_dir = POLICIES_DIR if os.path.isdir(POLICIES_DIR) else RECIPES_DIR
         if not os.path.isdir(policies_dir):

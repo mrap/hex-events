@@ -114,10 +114,10 @@ rules:                          # required, non-empty list
 ```yaml
 name: notify-on-build-done
 lifecycle: oneshot-delete
-ttl: 2h
 
 rules:
   - name: notify
+    ttl: 2h
     trigger:
       event: "build.completed"
     actions:
@@ -130,10 +130,10 @@ rules:
 ```yaml
 name: chain-compile-to-test
 lifecycle: oneshot-delete
-ttl: 30m
 
 rules:
   - name: start-tests-after-compile
+    ttl: 30m
     trigger:
       event: "compile.done"
     conditions:
