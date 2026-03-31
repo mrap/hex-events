@@ -216,7 +216,7 @@ class EventsDB:
             ).fetchall()
         return [dict(r) for r in rows]
 
-    def janitor(self, days: int = 7) -> int:
+    def janitor(self, days: int = 7, vacuum: bool = False) -> int:
         cur = self.conn.execute(
             "DELETE FROM events WHERE created_at < datetime('now', ?)",
             (f"-{days} days",),
@@ -224,7 +224,12 @@ class EventsDB:
         self.conn.execute(
             "DELETE FROM action_log WHERE event_id NOT IN (SELECT id FROM events)"
         )
+        self.conn.execute(
+            "DELETE FROM policy_eval_log WHERE event_id NOT IN (SELECT id FROM events)"
+        )
         self.conn.commit()
+        if vacuum and cur.rowcount > 0:
+            self.conn.execute("VACUUM")
         return cur.rowcount
 
     # -----------------------------------------------------------------------

@@ -1010,9 +1010,9 @@ def run_daemon():
         # Janitor
         if now - last_janitor > JANITOR_INTERVAL:
             try:
-                deleted = db.janitor(days=7)
+                deleted = db.janitor(days=7, vacuum=True)
                 if deleted > 0:
-                    log.info("Janitor: deleted %d old events", deleted)
+                    log.info("Janitor: deleted %d old events (+ orphan logs, vacuumed)", deleted)
             except Exception as e:
                 log.error("Janitor error: %s", e)
             last_janitor = now

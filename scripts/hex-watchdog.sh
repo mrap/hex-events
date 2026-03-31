@@ -28,7 +28,7 @@ else
 fi
 
 # 2. BOI daemon
-if ! pgrep -f "boi/daemon.py" > /dev/null 2>&1; then
+if ! pgrep -f "boi/.*daemon.py" > /dev/null 2>&1; then
     log "ALERT: BOI daemon not running"
     alert "BOI daemon is down. Manual investigation required."
 else

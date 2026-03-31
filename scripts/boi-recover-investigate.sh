@@ -202,7 +202,8 @@ PROMPT_TMP=$(mktemp /tmp/boi-investigate-prompt-XXXXXX.md)
 echo "$PROMPT_CONTENT" > "$PROMPT_TMP"
 
 AGENT_OUTPUT=""
-AGENT_OUTPUT=$(env -u CLAUDECODE claude --print --no-session-persistence --max-turns 1 -p "$(cat "$PROMPT_TMP")" </dev/null 2>/dev/null) || true
+ERR_LOG="/tmp/boi-recover-investigate-${QUEUE_ID}.err.log"
+AGENT_OUTPUT=$(env -u CLAUDECODE /Users/mrap/.local/bin/claude --dangerously-skip-permissions --print --no-session-persistence --max-turns 1 -p "$(cat "$PROMPT_TMP")" </dev/null 2>>"$ERR_LOG") || true
 
 rm -f "$PROMPT_TMP"
 
