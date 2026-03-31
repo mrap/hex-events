@@ -21,7 +21,7 @@ rules:
         timeout: 300
         retries: 2
         command: |
-          cd ~/hex && claude --print --no-session-persistence --permission-mode bypassPermissions -p "$(cat <<'PROMPT'
+          cd ~/hex && /Users/mrap/.local/bin/claude --dangerously-skip-permissions --print --no-session-persistence -p "$(cat <<'PROMPT'
           You are processing meeting notes from a Google Doc. Distill these notes into the hex framework's canonical file locations.
 
           ## Meeting Info

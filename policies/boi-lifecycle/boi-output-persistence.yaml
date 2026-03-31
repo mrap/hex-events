@@ -40,13 +40,19 @@ rules:
     actions:
       - type: shell
         command: |
-          python3 -c "
+          python3 -c '
           import json, sys, os
-          output_paths = json.loads('{{ event.output_paths | default(none) | tojson }}') or []
+          raw = """{{ event.output_paths | default("", true) }}"""
+          if not raw.strip():
+              sys.exit(0)
+          try:
+              output_paths = json.loads(raw) if raw.strip().startswith("[") else [p.strip() for p in raw.split(",") if p.strip()]
+          except (json.JSONDecodeError, ValueError):
+              output_paths = [p.strip() for p in raw.split(",") if p.strip()]
           missing = [p for p in output_paths if not os.path.exists(os.path.expanduser(p))]
           if missing:
               sys.exit(1)
-          "
+          '
         on_failure:
           - type: emit
             event: policy.violation
