@@ -1,9 +1,0 @@
-name: be-scan-trigger
-description: Run BE scanner on team directories daily
-rules:
-  - name: daily-scan
-    trigger:
-      event: timer.tick.daily
-    actions:
-      - type: shell
-        command: bash {{ workflow.config.scripts_dir }}/be-scanner.sh
