@@ -9,7 +9,7 @@ set -uo pipefail
 # Attribution source for any events emitted by this script or its policy
 HEX_SOURCE="hex:heartbeat"
 
-AGENT_DIR="${AGENT_DIR:-$HOME/mrap-hex}"
+AGENT_DIR="${AGENT_DIR:-$HOME/hex}"
 TIMESTAMP="$(date -u '+%Y-%m-%dT%H:%M:%S')"
 
 # Safe grep count: always returns a plain integer, never fails

@@ -23,7 +23,7 @@ rules:
     actions:
       - type: shell
         command: |
-          SCRIPT="$HOME/mrap-hex/.claude/scripts/tech-scout.sh"
+          SCRIPT="$AGENT_DIR/.claude/scripts/tech-scout.sh"
           if [ ! -f "$SCRIPT" ]; then
             echo "tech-scout.sh not found at $SCRIPT — skipping"
             exit 0

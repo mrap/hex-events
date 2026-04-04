@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-AGENT_DIR = os.environ.get("AGENT_DIR", os.path.expanduser("~/mrap-hex"))
+AGENT_DIR = os.environ.get("AGENT_DIR", os.path.expanduser("~/hex"))
 WATCHLIST = Path(AGENT_DIR) / "me" / "watchlist.md"
 STATE_FILE = Path(os.path.expanduser("~/.hex-events/watchlist-state.json"))
 

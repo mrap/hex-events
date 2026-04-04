@@ -24,7 +24,7 @@ rules:
     actions:
       - type: shell
         command: |
-          AGENT_DIR=/Users/mrap/mrap-hex python3 ~/.hex-events/scripts/watchlist-check.py
+          AGENT_DIR="${AGENT_DIR:-$HOME/hex}" python3 ~/.hex-events/scripts/watchlist-check.py
         timeout: 60
         on_success:
           - type: emit

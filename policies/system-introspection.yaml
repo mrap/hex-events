@@ -27,7 +27,7 @@ rules:
     actions:
       - type: shell
         command: >
-          AGENT_DIR="$HOME/mrap-hex" bash "$HOME/mrap-hex/.claude/scripts/system-introspection.sh"
+          AGENT_DIR="$AGENT_DIR" bash "$AGENT_DIR/.claude/scripts/system-introspection.sh"
         timeout: 600
         on_success:
           - type: emit

@@ -6,7 +6,7 @@
 
 set -uo pipefail
 
-AGENT_DIR="${AGENT_DIR:-$HOME/mrap-hex}"
+AGENT_DIR="${AGENT_DIR:-$HOME/hex}"
 TODAY="$(date '+%Y-%m-%d')"
 TODAY_DOW="$(date '+%A')"
 YESTERDAY="$(date -v-1d '+%Y-%m-%d' 2>/dev/null || date -d 'yesterday' '+%Y-%m-%d' 2>/dev/null || echo '')"

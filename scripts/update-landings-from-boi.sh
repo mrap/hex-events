@@ -23,7 +23,7 @@ if [[ -z "$SPEC_TITLE" ]]; then
 fi
 
 # Get today's date
-HEX_HOME="${HEX_HOME:-$HOME/mrap-hex}"
+HEX_HOME="${HEX_HOME:-$HOME/hex}"
 TODAY=$(bash "${HEX_HOME}/.claude/scripts/today.sh")
 if [[ -z "$TODAY" ]]; then
     echo "ERROR: today.sh returned empty string — is ${HEX_HOME}/.claude/scripts/today.sh present and executable?" >&2
