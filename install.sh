@@ -86,14 +86,14 @@ elif [ "$OS" = "Darwin" ]; then
     mkdir -p "$LAUNCH_AGENTS_DIR"
 
     # ---- Daemon plist ----
-    DAEMON_PLIST="$LAUNCH_AGENTS_DIR/com.mrap.hex-eventd.plist"
+    DAEMON_PLIST="$LAUNCH_AGENTS_DIR/com.hex.eventd.plist"
     cat > "$DAEMON_PLIST" << PLIST_EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.mrap.hex-eventd</string>
+    <string>com.hex.eventd</string>
     <key>ProgramArguments</key>
     <array>
         <string>${VENV_DIR}/bin/python3</string>
@@ -120,21 +120,21 @@ elif [ "$OS" = "Darwin" ]; then
 </plist>
 PLIST_EOF
 
-    if launchctl list 2>/dev/null | grep -q "com.mrap.hex-eventd"; then
+    if launchctl list 2>/dev/null | grep -q "com.hex.eventd"; then
         echo "==> Daemon LaunchAgent already loaded (skipping launchctl load)"
     else
         launchctl load "$DAEMON_PLIST" && echo "==> Daemon LaunchAgent loaded"
     fi
 
     # ---- Watchdog plist ----
-    WATCHDOG_PLIST="$LAUNCH_AGENTS_DIR/com.mrap.hex-watchdog.plist"
+    WATCHDOG_PLIST="$LAUNCH_AGENTS_DIR/com.hex.watchdog.plist"
     cat > "$WATCHDOG_PLIST" << PLIST_EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.mrap.hex-watchdog</string>
+    <string>com.hex.watchdog</string>
     <key>StartInterval</key>
     <integer>60</integer>
     <key>ProgramArguments</key>
@@ -150,7 +150,7 @@ PLIST_EOF
 </plist>
 PLIST_EOF
 
-    if launchctl list 2>/dev/null | grep -q "com.mrap.hex-watchdog"; then
+    if launchctl list 2>/dev/null | grep -q "com.hex.watchdog"; then
         echo "==> Watchdog LaunchAgent already loaded (skipping launchctl load)"
     else
         launchctl load "$WATCHDOG_PLIST" && echo "==> Watchdog LaunchAgent loaded"
@@ -159,7 +159,7 @@ PLIST_EOF
     # ---- fswatch plist (optional) ----
     if command -v fswatch >/dev/null 2>&1; then
         FSWATCH_BIN="$(command -v fswatch)"
-        FSWATCH_PLIST="$LAUNCH_AGENTS_DIR/com.mrap.hex-events-fswatch.plist"
+        FSWATCH_PLIST="$LAUNCH_AGENTS_DIR/com.hex.events-fswatch.plist"
 
         # HEX_WATCH_DIR: the directory fswatch monitors for new capture files.
         # fswatch emits a file.created event for each new file dropped here,
@@ -181,7 +181,7 @@ PLIST_EOF
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.mrap.hex-events-fswatch</string>
+    <string>com.hex.events-fswatch</string>
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>
@@ -202,7 +202,7 @@ PLIST_EOF
 </plist>
 PLIST_EOF
 
-        if launchctl list 2>/dev/null | grep -q "com.mrap.hex-events-fswatch"; then
+        if launchctl list 2>/dev/null | grep -q "com.hex.events-fswatch"; then
             echo "==> fswatch LaunchAgent already loaded (skipping)"
         else
             launchctl load "$FSWATCH_PLIST" && echo "==> fswatch LaunchAgent loaded"

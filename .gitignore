@@ -20,6 +20,10 @@ watchdog-last-integrity
 watchdog-paused
 watchlist-state.json
 last-heartbeat.json
+.playwright-mcp/
+bookmarks_*.json
+*.db-shm
+*.db-wal
 
 # Meta-specific policies (kept locally, not pushed upstream)
 policies/be-pipeline/_config.yaml

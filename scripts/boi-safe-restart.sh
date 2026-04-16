@@ -4,7 +4,7 @@
 # Runnable standalone — does not require hex-events daemon to be up.
 set -euo pipefail
 
-BOI_DIR="${BOI_DIR:-${HOME}/github.com/mrap/boi}"
+BOI_DIR="${BOI_DIR:-${HOME}/.boi}"
 OPS_LOG="${HOME}/.boi/ops-actions.log"
 GRACE_PERIOD=60
 CANARY_TIMEOUT=120
