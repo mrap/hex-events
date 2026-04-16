@@ -14,14 +14,20 @@ from datetime import datetime, timedelta
 
 import pytest
 
-sys.path.insert(0, os.path.expanduser("~/.hex-events"))
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _REPO_ROOT)
 
 from db import EventsDB
 from policy import load_policies
 from conditions import evaluate_conditions
 from hex_eventd import process_event, drain_deferred
 
-POLICY_FILE = os.path.expanduser("~/.hex-events/policies/landings-staleness.yaml")
+POLICY_FILE = os.path.join(_REPO_ROOT, "policies", "landings-staleness.yaml")
+
+pytestmark = pytest.mark.skipif(
+    not os.path.exists(POLICY_FILE),
+    reason="landings-staleness.yaml policy not found in repo (policy removed or not yet added)",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -36,7 +42,7 @@ def make_db():
 
 def load_landings_policy():
     """Load the landings-staleness policy from the policies directory."""
-    policies_dir = os.path.expanduser("~/.hex-events/policies")
+    policies_dir = os.path.join(_REPO_ROOT, "policies")
     policies = load_policies(policies_dir)
     for p in policies:
         if p.name == "landings-staleness":

@@ -5,8 +5,9 @@ import tempfile
 
 import pytest
 
-AUTO_COMMIT = os.path.expanduser("~/.hex-events/scripts/auto-commit-boi-output.sh")
-INIT_REPO = os.path.expanduser("~/.hex-events/scripts/init-boi-project-repo.sh")
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+AUTO_COMMIT = os.path.join(_REPO_ROOT, "scripts", "auto-commit-boi-output.sh")
+INIT_REPO = os.path.join(_REPO_ROOT, "scripts", "init-boi-project-repo.sh")
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

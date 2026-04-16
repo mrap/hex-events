@@ -5,7 +5,8 @@ import tempfile
 
 import pytest
 
-SCRIPT = os.path.expanduser("~/.hex-events/scripts/verify-boi-completion.sh")
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SCRIPT = os.path.join(_REPO_ROOT, "scripts", "verify-boi-completion.sh")
 
 
 def run_script(spec_id: str, repo_path: str) -> subprocess.CompletedProcess:

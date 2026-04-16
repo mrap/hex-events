@@ -19,14 +19,15 @@ import tempfile
 
 import pytest
 
-sys.path.insert(0, os.path.expanduser("~/.hex-events"))
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _REPO_ROOT)
 
 from db import EventsDB
 from policy import load_policies
 from hex_eventd import _process_event_policies
 
-POLICY_FILE = os.path.expanduser("~/.hex-events/policies/boi-completion-gate.yaml")
-VERIFY_SCRIPT = os.path.expanduser("~/.hex-events/scripts/verify-boi-completion.sh")
+POLICY_FILE = os.path.join(_REPO_ROOT, "policies", "boi-lifecycle", "boi-completion-gate.yaml")
+VERIFY_SCRIPT = os.path.join(_REPO_ROOT, "scripts", "verify-boi-completion.sh")
 
 
 # ---------------------------------------------------------------------------
@@ -34,7 +35,7 @@ VERIFY_SCRIPT = os.path.expanduser("~/.hex-events/scripts/verify-boi-completion.
 # ---------------------------------------------------------------------------
 
 def load_gate_policy():
-    policies_dir = os.path.expanduser("~/.hex-events/policies")
+    policies_dir = os.path.join(_REPO_ROOT, "policies")
     policies = load_policies(policies_dir)
     for p in policies:
         if p.name == "boi-completion-gate":
@@ -229,8 +230,8 @@ def _make_temp_db(tmp_dir: str) -> "EventsDB":
 
 
 def _load_gate_policy_list() -> list:
-    """Load boi-completion-gate from the installed policies dir."""
-    policies_dir = os.path.expanduser("~/.hex-events/policies")
+    """Load boi-completion-gate from the repo policies dir."""
+    policies_dir = os.path.join(_REPO_ROOT, "policies")
     return [p for p in load_policies(policies_dir) if p.name == "boi-completion-gate"]
 
 
@@ -262,6 +263,8 @@ def test_integration_pipeline_dirty_repo_emits_violation():
     policies = _load_gate_policy_list()
     assert policies, "boi-completion-gate policy not found in ~/.hex-events/policies"
 
+    os.environ["HEX_EVENTS_HOME"] = _REPO_ROOT
+
     with tempfile.TemporaryDirectory() as tmp:
         repo = make_dirty_repo(tmp)
         db = _make_temp_db(tmp)
@@ -290,6 +293,8 @@ def test_integration_pipeline_clean_repo_emits_verified():
     """Full pipeline: boi.spec.completed on clean repo → boi.completion.verified emitted."""
     policies = _load_gate_policy_list()
     assert policies, "boi-completion-gate policy not found in ~/.hex-events/policies"
+
+    os.environ["HEX_EVENTS_HOME"] = _REPO_ROOT
 
     with tempfile.TemporaryDirectory() as tmp:
         remote = make_bare_remote(tmp)
@@ -320,6 +325,8 @@ def test_integration_pipeline_dirty_then_clean():
     """Full scenario: dirty repo fails, commit+push, clean repo succeeds."""
     policies = _load_gate_policy_list()
     assert policies, "boi-completion-gate policy not found"
+
+    os.environ["HEX_EVENTS_HOME"] = _REPO_ROOT
 
     with tempfile.TemporaryDirectory() as tmp:
         db = _make_temp_db(tmp)

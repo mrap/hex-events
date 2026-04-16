@@ -13,11 +13,12 @@ import sys
 
 import pytest
 
-sys.path.insert(0, os.path.expanduser("~/.hex-events"))
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _REPO_ROOT)
 
 from policy import load_policies
 
-POLICY_FILE = os.path.expanduser("~/.hex-events/policies/boi-workspace-isolation.yaml")
+POLICY_FILE = os.path.join(_REPO_ROOT, "policies", "boi-lifecycle", "boi-workspace-isolation.yaml")
 
 
 # ---------------------------------------------------------------------------
@@ -26,7 +27,7 @@ POLICY_FILE = os.path.expanduser("~/.hex-events/policies/boi-workspace-isolation
 
 def load_workspace_isolation_policy():
     """Load the boi-workspace-isolation policy from the policies directory."""
-    policies_dir = os.path.expanduser("~/.hex-events/policies")
+    policies_dir = os.path.join(_REPO_ROOT, "policies")
     policies = load_policies(policies_dir)
     for p in policies:
         if p.name == "boi-workspace-isolation":

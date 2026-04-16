@@ -29,7 +29,8 @@ from datetime import datetime, timedelta
 import pytest
 import yaml
 
-sys.path.insert(0, os.path.expanduser("~/.hex-events"))
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _REPO_ROOT)
 
 from db import EventsDB
 from policy import Policy, Rule, load_policies
@@ -38,7 +39,7 @@ from conditions import evaluate_conditions
 from hex_eventd import process_event, drain_deferred
 from validator import build_static_graph, validate_graph, load_adapter_events
 
-HEX_DIR = os.path.expanduser("~/.hex-events")
+HEX_DIR = _REPO_ROOT
 HEX_EMIT = os.path.join(HEX_DIR, "hex_emit.py")
 
 
@@ -604,9 +605,9 @@ def test_condition_evaluation_with_count():
 def test_full_e2e_pipeline_landings_staleness():
     """Full pipeline: git.commit → deferred check → drain → violation fires.
 
-    Uses the real landings-staleness policy from ~/.hex-events/policies.
+    Uses the real landings-staleness policy from the repo's policies directory.
     """
-    policies_dir = os.path.expanduser("~/.hex-events/policies")
+    policies_dir = os.path.join(_REPO_ROOT, "policies")
     if not os.path.isdir(policies_dir):
         pytest.skip("No policies directory found")
 
@@ -664,7 +665,7 @@ def test_full_e2e_pipeline_landings_staleness():
 
 def test_no_violation_when_landings_updated():
     """No violation emitted when landings.updated is within the 10m window."""
-    policies_dir = os.path.expanduser("~/.hex-events/policies")
+    policies_dir = os.path.join(_REPO_ROOT, "policies")
     if not os.path.isdir(policies_dir):
         pytest.skip("No policies directory found")
 
