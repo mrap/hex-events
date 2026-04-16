@@ -5,7 +5,7 @@ Usage:
   python3 hex-lineage.py R-047              # Trace issue lifecycle
   python3 hex-lineage.py q-224              # Trace spec origin and completion
   python3 hex-lineage.py --auto-only --since 7d   # Hex-initiated actions
-  python3 hex-lineage.py --source mike --since 7d  # Mike-initiated actions
+  python3 hex-lineage.py --source user --since 7d  # User-initiated actions
   python3 hex-lineage.py --summary --since 30d     # Count by source
 """
 import argparse
@@ -233,8 +233,8 @@ def cmd_summary(conn: sqlite3.Connection, args):
 
         if source.startswith("hex:"):
             prefix = "hex (autonomous)"
-        elif source == "mike":
-            prefix = "mike (human)"
+        elif source == "user":
+            prefix = "user (human)"
         elif source == "unknown":
             prefix = "unknown (legacy)"
         else:
@@ -270,7 +270,7 @@ def main():
     )
     parser.add_argument(
         "--source",
-        help="Filter by exact source value (e.g. mike, hex:auto-dispatch)"
+        help="Filter by exact source value (e.g. user, hex:auto-dispatch)"
     )
     parser.add_argument(
         "--summary", action="store_true",
