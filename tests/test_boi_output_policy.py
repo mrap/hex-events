@@ -14,13 +14,14 @@ import tempfile
 
 import pytest
 
-sys.path.insert(0, os.path.expanduser("~/.hex-events"))
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _REPO_ROOT)
 
 from policy import load_policies
 from conditions import evaluate_conditions, Condition
 from hex_eventd import process_event
 
-POLICY_FILE = os.path.expanduser("~/.hex-events/policies/boi-output-persistence.yaml")
+POLICY_FILE = os.path.join(_REPO_ROOT, "policies", "boi-lifecycle", "boi-output-persistence.yaml")
 
 
 # ---------------------------------------------------------------------------
@@ -29,7 +30,7 @@ POLICY_FILE = os.path.expanduser("~/.hex-events/policies/boi-output-persistence.
 
 def load_boi_policy():
     """Load the boi-output-persistence policy from the policies directory."""
-    policies_dir = os.path.expanduser("~/.hex-events/policies")
+    policies_dir = os.path.join(_REPO_ROOT, "policies")
     policies = load_policies(policies_dir)
     for p in policies:
         if p.name == "boi-output-persistence":

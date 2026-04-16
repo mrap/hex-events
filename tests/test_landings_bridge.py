@@ -20,7 +20,8 @@ from pathlib import Path
 
 import pytest
 
-SCRIPT_PATH = os.path.expanduser("~/.hex-events/scripts/update-landings-from-boi.sh")
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SCRIPT_PATH = os.path.join(_REPO_ROOT, "scripts", "update-landings-from-boi.sh")
 TEST_DATE = "2026-03-19"
 
 
@@ -30,14 +31,18 @@ TEST_DATE = "2026-03-19"
 
 @pytest.fixture
 def tmp_home(tmp_path):
-    """Set up a fake HOME directory with today.sh, landings dir, and .boi dir."""
-    scripts_dir = tmp_path / "mrap-hex" / ".claude" / "scripts"
+    """Set up a fake HOME directory with today.sh, landings dir, and .boi dir.
+
+    The update-landings-from-boi.sh script looks for today.sh at
+    $HOME/hex/.claude/scripts/today.sh (using HEX_HOME=$HOME/hex by default).
+    """
+    scripts_dir = tmp_path / "hex" / ".claude" / "scripts"
     scripts_dir.mkdir(parents=True)
     today_sh = scripts_dir / "today.sh"
     today_sh.write_text(f"#!/usr/bin/env bash\necho '{TEST_DATE}'\n")
     today_sh.chmod(today_sh.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
 
-    landings_dir = tmp_path / "mrap-hex" / "landings"
+    landings_dir = tmp_path / "hex" / "landings"
     landings_dir.mkdir(parents=True)
 
     boi_dir = tmp_path / ".boi"
@@ -62,7 +67,7 @@ def run_script(tmp_home, event_type, spec_id, spec_title, tasks_done="0", tasks_
 
 
 def get_landings_file(tmp_home):
-    return tmp_home / "mrap-hex" / "landings" / f"{TEST_DATE}.md"
+    return tmp_home / "hex" / "landings" / f"{TEST_DATE}.md"
 
 
 def write_landings(tmp_home, content):
