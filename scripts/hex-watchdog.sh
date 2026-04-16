@@ -19,7 +19,7 @@ alert() { osascript -e "display notification \"$1\" with title \"hex-watchdog\""
 if ! pgrep -f "hex_eventd.py" > /dev/null 2>&1; then
     log "ALERT: hex-events daemon not running. Attempting restart."
     alert "hex-events daemon is down. Restarting..."
-    launchctl kickstart -k "gui/$(id -u)/com.mrap.hex-eventd" 2>/dev/null || {
+    launchctl kickstart -k "gui/$(id -u)/com.hex.eventd" 2>/dev/null || {
         log "ERROR: Failed to restart hex-events daemon via launchctl"
         alert "hex-events daemon restart FAILED"
     }

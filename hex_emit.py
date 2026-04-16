@@ -18,7 +18,7 @@ DEFAULT_DB = os.path.expanduser("~/.hex-events/events.db")
 
 # Known valid source patterns. Validation is advisory only (warning, not error).
 # Pattern: exact string or prefix ending with ":"
-VALID_SOURCE_PREFIXES = ("hex:", "mike", "unknown")
+VALID_SOURCE_PREFIXES = ("hex:", "user", "unknown")
 
 
 def _validate_source(source: str) -> None:
@@ -28,7 +28,7 @@ def _validate_source(source: str) -> None:
             return
     print(
         f"[hex-emit] WARNING: unrecognized source '{source}'. "
-        f"Expected: mike, unknown, or hex:<name>. Event will still be emitted.",
+        f"Expected: user, unknown, or hex:<name>. Event will still be emitted.",
         file=sys.stderr,
     )
 
