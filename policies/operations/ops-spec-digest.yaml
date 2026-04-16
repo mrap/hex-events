@@ -2,6 +2,7 @@ name: ops-spec-digest
 description: >
   Appends a one-line timestamped summary to ~/.boi/ops-digest.md whenever a BOI spec
   completes. This file is read by hex startup to brief sessions on what BOI accomplished.
+  Fixed 2026-04-02: event payload uses spec_id not queue_id.
 provides:
   events:
     - ops.spec.digest.written
@@ -21,13 +22,15 @@ rules:
           python3 -c "
           import os, sys, datetime
 
-          queue_id = '{{ event.queue_id }}'
+          spec_id = '{{ event.spec_id }}'
+          spec_title = '{{ event.spec_title }}'
           tasks_done = '{{ event.tasks_done }}'
           tasks_total = '{{ event.tasks_total }}'
 
           digest_path = os.path.expanduser('~/.boi/ops-digest.md')
           now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M')
-          line = f'- {now} — {queue_id} completed ({tasks_done}/{tasks_total} tasks)\n'
+          title_part = f' ({spec_title})' if spec_title and spec_title != 'None' else ''
+          line = f'- {now} — {spec_id}{title_part}: {tasks_done}/{tasks_total} tasks done\n'
 
           try:
               os.makedirs(os.path.dirname(digest_path), exist_ok=True)
@@ -42,4 +45,4 @@ rules:
           - type: emit
             event: ops.spec.digest.written
             payload:
-              queue_id: "{{ event.queue_id }}"
+              spec_id: "{{ event.spec_id }}"

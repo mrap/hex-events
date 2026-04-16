@@ -20,6 +20,10 @@ schedules:
     cron: "0 * * * *"
     event: timer.tick.1h
 
+  - name: 6h-tick
+    cron: "0 */6 * * *"
+    event: timer.tick.6h
+
   - name: daily-tick
     cron: "0 0 * * *"
     event: timer.tick.daily

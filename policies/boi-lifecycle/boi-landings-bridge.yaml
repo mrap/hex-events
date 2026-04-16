@@ -1,6 +1,6 @@
 description: Auto-update landings file when BOI specs are dispatched, completed, or
   failed
-enabled: false
+enabled: true
 name: boi-landings-bridge
 provides:
   events:

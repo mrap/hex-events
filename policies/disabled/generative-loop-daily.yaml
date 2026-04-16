@@ -22,12 +22,12 @@ rules:
     actions:
       - type: shell
         command: |
-          SCRIPT="$HOME/mrap-hex/.claude/scripts/generative-loop.py"
+          SCRIPT="$AGENT_DIR/.claude/scripts/generative-loop.py"
           if [ ! -f "$SCRIPT" ]; then
             echo "generative-loop.py not found at $SCRIPT — skipping"
             exit 0
           fi
-          cd "$HOME/mrap-hex" && AGENT_DIR=$(pwd) python3 "$SCRIPT" --cycle-type daily
+          cd "$AGENT_DIR" && AGENT_DIR=$(pwd) python3 "$SCRIPT" --cycle-type daily
         timeout: 300
         on_success:
           - type: emit

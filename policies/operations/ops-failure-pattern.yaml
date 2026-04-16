@@ -71,8 +71,8 @@ rules:
           - type: emit
             event: ops.pattern.detected
             payload:
-              trigger_queue_id: "{{ event.queue_id }}"
+              trigger_spec_id: "{{ event.spec_id }}"
               window_hours: 72
               message: "Recurring BOI failure pattern detected (3+ occurrences in 72h)"
           - type: notify
-            message: "BOI failure pattern detected: 3+ specs failed with same root cause in 72h (triggered by {{ event.queue_id }})"
+            message: "BOI failure pattern detected: 3+ specs failed with same root cause in 72h (triggered by {{ event.spec_id }})"
