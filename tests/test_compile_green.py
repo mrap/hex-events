@@ -2,6 +2,7 @@
 
 All fixtures use pytest tmp_path. No writes to ~/.hex-events/.
 """
+import os
 import textwrap
 import pytest
 
@@ -83,11 +84,21 @@ def test_synthetic_good_policy_no_warnings(tmp_path):
 # Real kalshi bundle (source file, not operational copy)
 # ---------------------------------------------------------------------------
 
-KALSHI_POLICY = "/Users/mrap/mrap-hex/integrations/kalshi/events/key-rotation-reminder.yaml"
+# Override-able for forks / CI. Skips cleanly when the dev-only path is absent.
+KALSHI_POLICY = os.environ.get(
+    "HEX_EVENTS_TEST_KALSHI_POLICY",
+    os.path.expanduser("~/mrap-hex/integrations/kalshi/events/key-rotation-reminder.yaml"),
+)
 
 
 def test_real_kalshi_policy_compiles_clean():
     """Real kalshi source policy compiles clean (timer.tick.weekly is a known producer)."""
+    if not os.path.exists(KALSHI_POLICY):
+        pytest.skip(
+            f"Kalshi policy fixture not present at {KALSHI_POLICY}. "
+            "Set HEX_EVENTS_TEST_KALSHI_POLICY to point at any real bundle policy, "
+            "or ignore on CI/forks."
+        )
     catalog = _catalog("timer.tick.weekly")
     issues = _run_all(KALSHI_POLICY, catalog)
     errors = _errors(issues)
