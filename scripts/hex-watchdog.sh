@@ -46,9 +46,9 @@ if [[ -f "$EVENTS_DB" ]]; then
         log "OK: No stalled events"
     fi
 
-    # 4. Cascade detection
+    # 4. Cascade detection (exclude boi.* — expected high-volume events from parallel BOI workers)
     cascade=$(sqlite3 "$EVENTS_DB" \
-        "SELECT event_type, COUNT(*) as cnt FROM events WHERE created_at >= datetime('now', '-10 minutes') GROUP BY event_type HAVING cnt > $CASCADE_THRESHOLD;" 2>/dev/null || echo "")
+        "SELECT event_type, COUNT(*) as cnt FROM events WHERE created_at >= datetime('now', '-10 minutes') AND event_type NOT LIKE 'boi.%' GROUP BY event_type HAVING cnt > $CASCADE_THRESHOLD;" 2>/dev/null || echo "")
     if [[ -n "$cascade" ]]; then
         log "ALERT: Event cascade detected: $cascade"
         alert "Event cascade detected! Pausing hex-events daemon."

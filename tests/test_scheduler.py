@@ -243,3 +243,61 @@ def test_startup_catchup_catchup_flag_in_payload(db, scheduler_config):
     assert row is not None
     payload = json.loads(row["payload"])
     assert payload.get("catchup") is True
+
+
+# ---------------------------------------------------------------------------
+# Dedup hardening — duplicate YAML entries (t-2 GREEN tests)
+# ---------------------------------------------------------------------------
+
+def test_duplicate_schedule_entries_deduped(db, tmp_path):
+    """GREEN test: duplicate YAML entries emit exactly once due to _load() dedup."""
+    config = tmp_path / "dup_scheduler.yaml"
+    config.write_text(
+        "schedules:\n"
+        "  - name: test-dup-1\n"
+        "    cron: '* * * * *'\n"
+        "    event: timer.tick.test-dup\n"
+        "  - name: test-dup-2\n"
+        "    cron: '* * * * *'\n"
+        "    event: timer.tick.test-dup\n"
+    )
+    s = SchedulerAdapter(config_path=str(config))
+    now = datetime(2026, 3, 19, 14, 5, 0)
+    result = s.tick(db, now=now)
+    assert len(result) == 1  # dedup keeps only the first occurrence
+
+
+def test_tick_emits_once_per_window(db, scheduler_config):
+    """tick() called twice in the same cron window emits 0 events on second call."""
+    s = SchedulerAdapter(config_path=scheduler_config)
+    now = datetime(2026, 3, 19, 14, 5, 0)
+    first = s.tick(db, now=now)
+    assert len(first) > 0
+    second = s.tick(db, now=now)
+    assert len(second) == 0
+
+
+# ---------------------------------------------------------------------------
+# Config validation — duplicate schedule entries (t-3)
+# ---------------------------------------------------------------------------
+
+def test_load_warns_on_duplicate_schedules(tmp_path, caplog):
+    """_load() deduplicates duplicate event entries and logs a warning."""
+    import logging
+    config = tmp_path / "dup_scheduler.yaml"
+    config.write_text(
+        "schedules:\n"
+        "  - name: test-dup-1\n"
+        "    cron: '* * * * *'\n"
+        "    event: timer.tick.test-dup\n"
+        "  - name: test-dup-2\n"
+        "    cron: '* * * * *'\n"
+        "    event: timer.tick.test-dup\n"
+        "  - name: test-unique\n"
+        "    cron: '0 * * * *'\n"
+        "    event: timer.tick.unique\n"
+    )
+    with caplog.at_level(logging.WARNING, logger="hex-events"):
+        s = SchedulerAdapter(config_path=str(config))
+    assert len(s.schedules) == 2  # 3 raw entries, 2 after dedup
+    assert any("duplicate" in msg.lower() for msg in caplog.messages)
