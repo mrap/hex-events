@@ -190,6 +190,29 @@ make smoke
 ./venv/bin/python3 -m pytest tests/test_conditions.py -v
 ```
 
+## Static Verification (v0.2.0)
+
+The compiler statically verifies bundle policies before they land in `~/.hex-events/policies/`. Invoked by `hex-integration install`; also available standalone.
+
+```bash
+# Event catalog: {event → {producers[], consumers[]}}
+./hex_events_cli.py list-events [--format json]
+
+# Validate without writing (exit 0 = clean, 1 = errors, 2 = warnings only)
+./hex_events_cli.py check <bundle-dir-or-policy>
+./hex_events_cli.py check <path> --format json
+./hex_events_cli.py check <path> --permissive  # warn-only for legacy corpus
+./hex_events_cli.py check --all               # full scan of ~/.hex-events/policies/
+
+# Compile: check + write manifest headers atomically
+./hex_events_cli.py compile <bundle-dir>
+./hex_events_cli.py compile <bundle-dir> --dry-run
+```
+
+Validators live in `validators/`: `schema.py`, `producer_check.py`, `deadcode.py`.
+
+Compiled policies carry `# compiler_version:` and `# checks_passed:` manifest headers.
+
 ## Adding a New Policy
 
 1. Create a YAML file in `policies/` (or inside a workflow subdirectory)

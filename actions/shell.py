@@ -15,7 +15,8 @@ class ShellAction:
         command = render_templates({"command": command}, tpl_ctx)["command"]
         try:
             result = subprocess.run(
-                command, shell=True, capture_output=True, text=True, timeout=timeout,
+                command, shell=True, executable="/bin/bash",
+                capture_output=True, text=True, timeout=timeout,
             )
             if result.returncode == 0:
                 action_result = {"stdout": result.stdout.strip(), "returncode": 0}

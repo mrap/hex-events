@@ -13,17 +13,19 @@ Usage:
   hex-events trace --policy <name> [--since <hours>]  # Policy trace over time
 """
 import argparse
+import hashlib
 import json
 import os
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from db import EventsDB
 from recipe import load_recipes
 
 BASE_DIR = os.path.expanduser("~/.hex-events")
+COMPILER_VERSION = "1.0.0"
 DB_PATH = os.path.join(BASE_DIR, "events.db")
 RECIPES_DIR = os.path.join(BASE_DIR, "recipes")
 POLICIES_DIR = os.path.join(BASE_DIR, "policies")
@@ -877,6 +879,460 @@ def cmd_workflow(args):
         print(f"    {pname}")
 
 
+def _build_event_catalog(policies_dir: str = POLICIES_DIR,
+                          scheduler_config: str | None = None) -> dict:
+    """Build {event: {producers: [...], consumers: [...]}} from scheduler + policies."""
+    import yaml
+
+    if scheduler_config is None:
+        scheduler_config = os.path.join(BASE_DIR, "adapters", "scheduler.yaml")
+
+    catalog: dict = {}
+
+    def _entry(event: str) -> dict:
+        if event not in catalog:
+            catalog[event] = {"producers": [], "consumers": []}
+        return catalog[event]
+
+    # Scheduler producers
+    if os.path.exists(scheduler_config):
+        with open(scheduler_config) as f:
+            data = yaml.safe_load(f) or {}
+        for sched in data.get("schedules", []):
+            evt = sched.get("event")
+            if evt:
+                _entry(evt)["producers"].append({"kind": "scheduler", "name": sched.get("name", "")})
+
+    # Policy consumers + producers
+    if os.path.isdir(policies_dir):
+        for fname in sorted(os.listdir(policies_dir)):
+            if not (fname.endswith(".yaml") or fname.endswith(".yml")):
+                continue
+            fpath = os.path.join(policies_dir, fname)
+            try:
+                with open(fpath) as f:
+                    pol = yaml.safe_load(f) or {}
+            except Exception:
+                continue
+            if not isinstance(pol, dict):
+                continue
+            policy_name = pol.get("name", fname)
+
+            # provides.events — policy-level producers
+            for evt in (pol.get("provides") or {}).get("events", []):
+                _entry(evt)  # ensure entry exists
+
+            # requires.events — consumers
+            for evt in (pol.get("requires") or {}).get("events", []):
+                _entry(evt)["consumers"].append({"policy": policy_name})
+
+            for rule in pol.get("rules", []):
+                if not isinstance(rule, dict):
+                    continue
+                rule_name = rule.get("name", "")
+
+                # rule trigger event — consumer
+                trigger_evt = (rule.get("trigger") or {}).get("event")
+                if trigger_evt:
+                    entry = _entry(trigger_evt)
+                    already = any(
+                        c.get("policy") == policy_name and c.get("rule") == rule_name
+                        for c in entry["consumers"]
+                    )
+                    if not already:
+                        entry["consumers"].append({"policy": policy_name, "rule": rule_name})
+
+                # on_success / on_failure emit actions — producers
+                for hook in ("on_success", "on_failure"):
+                    for action in rule.get(hook, []):
+                        if isinstance(action, dict) and action.get("type") == "emit":
+                            emitted = action.get("event")
+                            if emitted:
+                                _entry(emitted)["producers"].append(
+                                    {"kind": "policy", "name": policy_name, "rule": rule_name}
+                                )
+
+                # per-action on_success/on_failure
+                for action in rule.get("actions", []):
+                    if not isinstance(action, dict):
+                        continue
+                    for hook in ("on_success", "on_failure"):
+                        for sub_action in action.get(hook, []):
+                            if isinstance(sub_action, dict) and sub_action.get("type") == "emit":
+                                emitted = sub_action.get("event")
+                                if emitted:
+                                    _entry(emitted)["producers"].append(
+                                        {"kind": "policy", "name": policy_name, "rule": rule_name}
+                                    )
+
+    return catalog
+
+
+def cmd_list_events(args):
+    catalog = _build_event_catalog()
+    fmt = getattr(args, "format", None)
+
+    if fmt == "json":
+        print(json.dumps({"events": catalog}, indent=2))
+        return
+
+    # Human-readable table
+    all_events = sorted(catalog.keys())
+    if not all_events:
+        print("No events found.")
+        return
+
+    for evt in all_events:
+        entry = catalog[evt]
+        producers = entry["producers"]
+        consumers = entry["consumers"]
+        orphan_consumer = len(consumers) > 0 and len(producers) == 0
+        orphan_producer = len(producers) > 0 and len(consumers) == 0
+        flag = " ⚠️" if orphan_consumer else (" ℹ️" if orphan_producer else "")
+        print(f"{evt}{flag}")
+        if producers:
+            for p in producers:
+                if p.get("kind") == "scheduler":
+                    print(f"  ← scheduler:{p['name']}")
+                else:
+                    print(f"  ← policy:{p['name']} (rule:{p.get('rule', '')})")
+        else:
+            print("  ← (no producer)")
+        if consumers:
+            for c in consumers:
+                rule = c.get("rule", "")
+                print(f"  → {c['policy']}" + (f" rule:{rule}" if rule else ""))
+        else:
+            print("  → (no consumer)")
+
+
+_SCHEMA_CODES = {
+    "YAML_PARSE_ERROR", "FILE_READ_ERROR", "NOT_A_DICT", "SCHEMA_FLAT_FORM",
+    "MISSING_NAME", "MISSING_RULES", "RULE_NOT_DICT", "RULE_MISSING_NAME",
+    "RULE_MISSING_TRIGGER", "RULE_TRIGGER_NO_EVENT",
+    "NO_ACTIONS", "ACTION_NOT_DICT", "ACTION_MISSING_TYPE",
+}
+_PRODUCER_CODES = {"EVENT_NO_PRODUCER", "EVENT_MULTIPLE_PRODUCERS"}
+_DEADCODE_CODES = {
+    "DUPLICATE_RULE_NAME", "DUPLICATE_POLICY_NAME",
+    "UNKNOWN_ACTION_TYPE", "NO_ACTIONS", "RATE_LIMIT_CADENCE_MISMATCH",
+}
+
+
+def _resolve_check_paths(path: str) -> list[str]:
+    """Resolve a path argument to a list of YAML policy files."""
+    if os.path.isfile(path):
+        return [path]
+    if os.path.isdir(path):
+        events_dir = os.path.join(path, "events")
+        search_dir = events_dir if os.path.isdir(events_dir) else path
+        return sorted(
+            os.path.join(search_dir, f)
+            for f in os.listdir(search_dir)
+            if f.endswith(".yaml") or f.endswith(".yml")
+        )
+    return []
+
+
+def cmd_check(args):
+    from validators import schema as schema_v
+    from validators import producer_check as producer_v
+    from validators import deadcode as deadcode_v
+
+    permissive = getattr(args, "permissive", False)
+    fmt = getattr(args, "format", None)
+
+    if getattr(args, "all", False):
+        paths = (
+            sorted(
+                os.path.join(POLICIES_DIR, f)
+                for f in os.listdir(POLICIES_DIR)
+                if f.endswith(".yaml") or f.endswith(".yml")
+            )
+            if os.path.isdir(POLICIES_DIR)
+            else []
+        )
+    else:
+        paths = _resolve_check_paths(args.path)
+
+    if not paths:
+        src = getattr(args, "path", "--all")
+        print(f"No YAML files found at: {src}", file=sys.stderr)
+        sys.exit(1)
+
+    catalog = _build_event_catalog()
+
+    file_results = []
+    for p in paths:
+        issues: list[dict] = []
+        issues += schema_v.validate(p)
+        issues += producer_v.validate(p, catalog)
+        issues += deadcode_v.validate(p)
+        file_results.append({"path": p, "issues": issues})
+
+    # Corpus-level checks (e.g. duplicate policy names across files)
+    corpus_issues = deadcode_v.validate_corpus(paths)
+    corpus_by_file: dict[str, list] = {}
+    for issue in corpus_issues:
+        corpus_by_file.setdefault(issue["location"]["file"], []).append(issue)
+    for fr in file_results:
+        fr["issues"] += corpus_by_file.get(fr["path"], [])
+
+    total_errors = sum(1 for fr in file_results for i in fr["issues"] if i["severity"] == "error")
+    total_warnings = sum(1 for fr in file_results for i in fr["issues"] if i["severity"] == "warning")
+
+    # Split compiled vs legacy when --all is used
+    all_mode = getattr(args, "all", False)
+
+    def _is_compiled(path: str) -> bool:
+        try:
+            with open(path) as fh:
+                return fh.readline().startswith("# generated_from:")
+        except OSError:
+            return False
+
+    if all_mode:
+        compiled_results = [fr for fr in file_results if _is_compiled(fr["path"])]
+        legacy_results = [fr for fr in file_results if not _is_compiled(fr["path"])]
+        compiled_errors = sum(1 for fr in compiled_results for i in fr["issues"] if i["severity"] == "error")
+        compiled_warnings = sum(1 for fr in compiled_results for i in fr["issues"] if i["severity"] == "warning")
+        legacy_errors = sum(1 for fr in legacy_results for i in fr["issues"] if i["severity"] == "error")
+        legacy_warnings = sum(1 for fr in legacy_results for i in fr["issues"] if i["severity"] == "warning")
+    else:
+        compiled_results = legacy_results = []
+        compiled_errors = compiled_warnings = legacy_errors = legacy_warnings = 0
+
+    if fmt == "json":
+        summary: dict = {
+            "files": len(file_results),
+            "errors": total_errors,
+            "warnings": total_warnings,
+        }
+        if all_mode:
+            summary["compiled"] = {
+                "files": len(compiled_results),
+                "errors": compiled_errors,
+                "warnings": compiled_warnings,
+            }
+            summary["legacy"] = {
+                "files": len(legacy_results),
+                "errors": legacy_errors,
+                "warnings": legacy_warnings,
+            }
+        print(json.dumps({
+            "files": file_results,
+            "summary": summary,
+        }, indent=2))
+    else:
+        for fr in file_results:
+            p = fr["path"]
+            issues = fr["issues"]
+            print(p)
+
+            schema_issues = [i for i in issues if i["code"] in _SCHEMA_CODES]
+            producer_issues = [i for i in issues if i["code"] in _PRODUCER_CODES]
+            deadcode_issues = [i for i in issues if i["code"] in _DEADCODE_CODES]
+
+            for validator_name, v_issues in [
+                ("schema", schema_issues),
+                ("producer-check", producer_issues),
+                ("dead-code", deadcode_issues),
+            ]:
+                if not v_issues:
+                    print(f"  ✓ {validator_name}")
+                else:
+                    for iss in v_issues:
+                        marker = "✗" if iss["severity"] == "error" else "⚠"
+                        print(f"  {marker} {iss['code']}: {iss['message']}")
+
+        n = len(file_results)
+        err_word = "error" if total_errors == 1 else "errors"
+        warn_word = "warning" if total_warnings == 1 else "warnings"
+        if all_mode:
+            c_err_word = "error" if compiled_errors == 1 else "errors"
+            c_warn_word = "warning" if compiled_warnings == 1 else "warnings"
+            l_err_word = "error" if legacy_errors == 1 else "errors"
+            l_warn_word = "warning" if legacy_warnings == 1 else "warnings"
+            print(f"\ncompiled: {len(compiled_results)} files · {compiled_errors} {c_err_word} · {compiled_warnings} {c_warn_word}")
+            print(f"legacy:   {len(legacy_results)} files · {legacy_errors} {l_err_word} · {legacy_warnings} {l_warn_word}")
+            print(f"total:    {n} files · {total_errors} {err_word} · {total_warnings} {warn_word}")
+        else:
+            file_word = "file" if n == 1 else "files"
+            print(f"\n{n} {file_word} · {total_errors} {err_word} · {total_warnings} {warn_word}")
+
+    if permissive:
+        sys.exit(0)
+    if total_errors > 0:
+        sys.exit(1)
+    if total_warnings > 0:
+        sys.exit(2)
+    sys.exit(0)
+
+
+def _run_check_strict(paths: list[str], catalog: dict) -> tuple[list[dict], int, int]:
+    """Run all validators on paths, return (file_results, total_errors, total_warnings)."""
+    from validators import schema as schema_v
+    from validators import producer_check as producer_v
+    from validators import deadcode as deadcode_v
+
+    file_results = []
+    for p in paths:
+        issues: list[dict] = []
+        issues += schema_v.validate(p)
+        issues += producer_v.validate(p, catalog)
+        issues += deadcode_v.validate(p)
+        file_results.append({"path": p, "issues": issues})
+
+    corpus_issues = deadcode_v.validate_corpus(paths)
+    corpus_by_file: dict[str, list] = {}
+    for issue in corpus_issues:
+        corpus_by_file.setdefault(issue["location"]["file"], []).append(issue)
+    for fr in file_results:
+        fr["issues"] += corpus_by_file.get(fr["path"], [])
+
+    total_errors = sum(1 for fr in file_results for i in fr["issues"] if i["severity"] == "error")
+    total_warnings = sum(1 for fr in file_results for i in fr["issues"] if i["severity"] == "warning")
+    return file_results, total_errors, total_warnings
+
+
+def _source_hash(path: str) -> str:
+    with open(path, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()[:16]
+
+
+def _is_already_compiled(out_path: str, src_path: str) -> bool:
+    """Return True if the existing compiled file is up-to-date (same version + same source hash)."""
+    if not os.path.exists(out_path):
+        return False
+    src_hash = _source_hash(src_path)
+    try:
+        with open(out_path) as f:
+            for line in f:
+                if not line.startswith("#"):
+                    break
+                if f"compiler_version: {COMPILER_VERSION}" in line:
+                    # also check source hash
+                    pass
+                if f"source_hash: {src_hash}" in line:
+                    return True
+    except OSError:
+        pass
+    return False
+
+
+def _build_compiled_content(src_path: str, bundle_name: str, checks_passed: list[str]) -> str:
+    """Return the compiled YAML content with manifest headers."""
+    # Derive the generated_from path relative to mrap-hex integrations root
+    # e.g. /Users/mrap/mrap-hex/integrations/kalshi/events/foo.yaml → integrations/kalshi/events/foo.yaml
+    abs_path = os.path.abspath(src_path)
+    mrap_hex = os.path.expanduser("~/mrap-hex")
+    if abs_path.startswith(mrap_hex + os.sep):
+        rel = abs_path[len(mrap_hex) + 1:]
+    else:
+        rel = abs_path
+
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    src_hash = _source_hash(src_path)
+
+    with open(src_path) as f:
+        original = f.read()
+
+    # Strip any existing header comments that start with generated_from/generated_at/etc.
+    lines = original.splitlines(keepends=True)
+    body_lines = []
+    skip_header = True
+    for line in lines:
+        if skip_header and line.startswith("#"):
+            continue
+        skip_header = False
+        body_lines.append(line)
+    body = "".join(body_lines).lstrip("\n")
+
+    header = (
+        f"# generated_from: {rel}\n"
+        f"# generated_at: {now}\n"
+        f"# compiler_version: {COMPILER_VERSION}\n"
+        f"# source_hash: {src_hash}\n"
+        f"# checks_passed: {', '.join(checks_passed)}\n"
+    )
+    return header + body
+
+
+def cmd_compile(args):
+    dry_run = getattr(args, "dry_run", False)
+    bundle_path = os.path.abspath(args.path)
+
+    # Resolve input files (same logic as check)
+    paths = _resolve_check_paths(bundle_path)
+    if not paths:
+        print(f"No YAML files found at: {args.path}", file=sys.stderr)
+        sys.exit(1)
+
+    # Derive bundle name from directory
+    if os.path.isfile(bundle_path):
+        bundle_name = os.path.basename(os.path.dirname(os.path.dirname(bundle_path)))
+    else:
+        bundle_name = os.path.basename(bundle_path.rstrip("/"))
+
+    catalog = _build_event_catalog()
+    file_results, total_errors, total_warnings = _run_check_strict(paths, catalog)
+
+    if total_errors > 0:
+        for fr in file_results:
+            for issue in fr["issues"]:
+                if issue["severity"] == "error":
+                    loc = issue["location"]
+                    print(
+                        f"{loc.get('file', fr['path'])}:{loc.get('line', '?')}: "
+                        f"[{issue['code']}] {issue['message']}",
+                        file=sys.stderr,
+                    )
+        print(
+            f"\nCompile failed: {total_errors} error(s). No output written.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    checks_passed = ["schema", "producer-check", "dead-code"]
+    compiled_count = 0
+    skipped_count = 0
+
+    for src_path in paths:
+        stem = os.path.splitext(os.path.basename(src_path))[0]
+        out_name = f"{bundle_name}-{stem}.yaml"
+        out_path = os.path.join(POLICIES_DIR, out_name)
+
+        if _is_already_compiled(out_path, src_path):
+            print(f"  no changes: {out_name}")
+            skipped_count += 1
+            continue
+
+        content = _build_compiled_content(src_path, bundle_name, checks_passed)
+
+        if dry_run:
+            print(f"  [dry-run] would write: {out_path}")
+            print("  --- preview ---")
+            for line in content.splitlines()[:8]:
+                print(f"  {line}")
+            print("  ...")
+        else:
+            os.makedirs(POLICIES_DIR, exist_ok=True)
+            tmp_path = out_path + ".tmp"
+            with open(tmp_path, "w") as f:
+                f.write(content)
+            os.replace(tmp_path, out_path)
+            print(f"  compiled: {out_path}")
+            compiled_count += 1
+
+    if not dry_run:
+        action = "compiled" if compiled_count else "up to date"
+        print(
+            f"\n{len(paths)} file(s) · {compiled_count} {action} · {skipped_count} skipped"
+        )
+
+    sys.exit(0)
+
+
 def main():
     parser = argparse.ArgumentParser(description="hex-events CLI")
     sub = parser.add_subparsers(dest="command")
@@ -917,6 +1373,20 @@ def main():
     wf_p.add_argument("action", nargs="?", choices=["enable", "disable", "status"],
                        help="Action to perform on the workflow")
 
+    le_p = sub.add_parser("list-events", help="Show full event catalog (producers + consumers)")
+    le_p.add_argument("--format", choices=["json"], help="Output format")
+
+    check_p = sub.add_parser("check", help="Run all validators against a bundle or policy file")
+    check_p.add_argument("path", nargs="?", help="Bundle dir, policy file, or bundle root (omit with --all)")
+    check_p.add_argument("--format", choices=["json"], help="Output format")
+    check_p.add_argument("--permissive", action="store_true", help="Warn-only mode: always exit 0")
+    check_p.add_argument("--all", action="store_true", help=f"Check all policies in {POLICIES_DIR}")
+
+    compile_p = sub.add_parser("compile", help="Compile a bundle: check + write manifest-headed policy files")
+    compile_p.add_argument("path", help="Bundle dir or single policy file")
+    compile_p.add_argument("--dry-run", action="store_true", dest="dry_run",
+                           help="Run checks and show what would be written without writing")
+
     args = parser.parse_args()
     if args.command == "status":
         cmd_status(args)
@@ -940,6 +1410,12 @@ def main():
         cmd_workflows(args)
     elif args.command == "workflow":
         cmd_workflow(args)
+    elif args.command == "list-events":
+        cmd_list_events(args)
+    elif args.command == "check":
+        cmd_check(args)
+    elif args.command == "compile":
+        cmd_compile(args)
     else:
         parser.print_help()
 

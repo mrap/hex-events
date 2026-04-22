@@ -135,6 +135,52 @@ Disable a workflow by setting `enabled: false` in `_config.yaml` or adding a `.d
 ./hex_events_cli.py recipes                       # List loaded policies
 ```
 
+## Static verification (v0.2.0)
+
+hex-events owns the event model and provides a compiler that statically verifies policies before they land in `~/.hex-events/policies/`. The compile step is the trust boundary — mistakes surface at `hex-integration install` time, not weeks later in telemetry.
+
+### New CLI subcommands
+
+```bash
+# Emit the full {event → {producers[], consumers[]}} catalog as JSON
+./hex_events_cli.py list-events [--format json]
+
+# Run all validators — exit 0 = clean, 1 = errors, 2 = warnings only
+./hex_events_cli.py check <bundle-dir-or-policy-file>
+./hex_events_cli.py check <path> --format json
+./hex_events_cli.py check <path> --permissive   # warn-only (legacy corpus)
+./hex_events_cli.py check --all                 # scan entire ~/.hex-events/policies/
+
+# Compile: runs check + writes output with manifest headers if clean
+./hex_events_cli.py compile <bundle-dir>
+./hex_events_cli.py compile <bundle-dir> --dry-run
+```
+
+### What the compiler checks
+
+| Check | Validator | Error code |
+|-------|-----------|------------|
+| Unknown event subscription (no producer) | producer-check | `EVENT_NO_PRODUCER` |
+| Wrong schema (flat `trigger:/action:`) | schema | `SCHEMA_FLAT_FORM` |
+| Duplicate rule name within a policy | dead-code | `DUPLICATE_RULE_NAME` |
+| Duplicate policy name across corpus | dead-code | `DUPLICATE_POLICY_NAME` |
+| Unknown action type | dead-code | `UNKNOWN_ACTION_TYPE` |
+| Rule with no actions | dead-code | `NO_ACTIONS` |
+| Rate-limit window smaller than trigger cadence | dead-code | `RATE_LIMIT_CADENCE_MISMATCH` (warning) |
+
+### Compiled policy headers
+
+Every policy compiled through `hex-events compile` carries:
+
+```yaml
+# generated_from: integrations/<bundle>/events/<stem>.yaml
+# generated_at: <ISO-8601>
+# compiler_version: 1.0.0
+# checks_passed: schema, producer-check, dead-code
+```
+
+`hex-integration install` shells out to `hex-events compile` for every `events/*.yaml` in a bundle. On compile error, install exits non-zero and no files land in `~/.hex-events/policies/`.
+
 ## Emitting Events
 
 ```bash

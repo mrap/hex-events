@@ -4,6 +4,10 @@
 # See docs/design-v2.md for the timer model.
 
 schedules:
+  - name: 1m-tick
+    cron: "* * * * *"
+    event: timer.tick.1m
+
   - name: 5m-tick
     cron: "*/5 * * * *"
     event: timer.tick.5m
@@ -47,6 +51,14 @@ schedules:
   - name: weekly-tick
     cron: "0 9 * * 0"
     event: timer.tick.weekly
+
+  - name: hourly-tick
+    cron: "0 * * * *"
+    event: timer.tick.hourly
+
+  - name: minutely-tick
+    cron: "* * * * *"
+    event: timer.tick.minutely
 
 # External adapter events (fswatch, git hooks) — declared here for static
 # validation only; no cron is needed, they are emitted by external processes.
