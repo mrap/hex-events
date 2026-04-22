@@ -46,6 +46,17 @@ class SchedulerAdapter:
         except Exception as e:
             log.error("Failed to load scheduler config %s: %s", self.config_path, e)
             self.schedules = []
+            return
+        seen = {}
+        deduped = []
+        for s in self.schedules:
+            evt = s.get("event")
+            if evt in seen:
+                log.warning("Scheduler: duplicate schedule for %s, keeping first", evt)
+                continue
+            seen[evt] = len(deduped)
+            deduped.append(s)
+        self.schedules = deduped
 
     def reload(self):
         """Reload config from disk (called on hot-reload interval)."""
@@ -80,6 +91,7 @@ class SchedulerAdapter:
         if now is None:
             now = datetime.utcnow()
         emitted = []
+        seen_keys = set()
         for sched in self.schedules:
             cron_expr = sched.get("cron")
             event_type = sched.get("event")
@@ -88,10 +100,14 @@ class SchedulerAdapter:
             try:
                 last_tick = self._get_last_tick(cron_expr, now)
                 key = _make_dedup_key(event_type, last_tick)
+                if key in seen_keys:
+                    continue
                 if self._dedup_key_exists(db, key):
                     continue
                 payload = json.dumps({"scheduled_at": _iso_minute(last_tick)})
-                db.insert_event(event_type, payload, "scheduler", dedup_key=key)
+                result = db.insert_event(event_type, payload, "scheduler", dedup_key=key)
+                if result is not None:
+                    seen_keys.add(key)
                 log.info("Scheduler: emitted %s (dedup_key=%s)", event_type, key)
                 emitted.append(event_type)
             except Exception as e:
