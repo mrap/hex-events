@@ -16,7 +16,8 @@ log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $1" >> "$LOG"; }
 alert() { osascript -e "display notification \"$1\" with title \"hex-watchdog\"" 2>/dev/null || true; }
 
 # 1. hex-events daemon
-if ! pgrep -f "hex_eventd.py" > /dev/null 2>&1; then
+# Use full path match to avoid matching BOI workers whose prompts reference hex_eventd.py
+if ! pgrep -f "/hex-events/hex_eventd.py" > /dev/null 2>&1; then
     log "ALERT: hex-events daemon not running. Attempting restart."
     alert "hex-events daemon is down. Restarting..."
     launchctl kickstart -k "gui/$(id -u)/com.hex.eventd" 2>/dev/null || {
@@ -46,18 +47,15 @@ if [[ -f "$EVENTS_DB" ]]; then
         log "OK: No stalled events"
     fi
 
-    # 4. Cascade detection (exclude boi.* — expected high-volume events from parallel BOI workers)
+    # 4. Cascade detection
+    # Excluded: boi.* (parallel BOI workers), integrations.* and hex.integration.* (health monitor output)
     cascade=$(sqlite3 "$EVENTS_DB" \
-        "SELECT event_type, COUNT(*) as cnt FROM events WHERE created_at >= datetime('now', '-10 minutes') AND event_type NOT LIKE 'boi.%' GROUP BY event_type HAVING cnt > $CASCADE_THRESHOLD;" 2>/dev/null || echo "")
+        "SELECT event_type, COUNT(*) as cnt FROM events WHERE created_at >= datetime('now', '-10 minutes') AND event_type NOT LIKE 'boi.%' AND event_type NOT LIKE 'integrations.%' AND event_type NOT LIKE 'hex.integration.%' GROUP BY event_type HAVING cnt > $CASCADE_THRESHOLD;" 2>/dev/null || echo "")
     if [[ -n "$cascade" ]]; then
         log "ALERT: Event cascade detected: $cascade"
-        alert "Event cascade detected! Pausing hex-events daemon."
-        daemon_pid=$(pgrep -f "hex_eventd.py" 2>/dev/null | head -1)
-        if [[ -n "$daemon_pid" ]]; then
-            kill -SIGSTOP "$daemon_pid" 2>/dev/null || true
-            echo "$(date '+%Y-%m-%d %H:%M:%S') Cascade: $cascade" > "$PAUSE_MARKER"
-            log "ACTION: Paused hex-events daemon (SIGSTOP pid=$daemon_pid)"
-        fi
+        alert "Event cascade detected in hex-events: $cascade"
+        # Log only — do not SIGSTOP the daemon, as pausing prevents the backlog from draining
+        log "INFO: Cascade detected but not pausing daemon (pausing worsens backlog)"
     else
         log "OK: No cascade"
     fi
