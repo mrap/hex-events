@@ -110,7 +110,10 @@ def _evaluate_shell_condition(command: str, payload: dict) -> tuple:
             from datetime import datetime
             command = Template(command).render(event=payload, now=datetime.utcnow())
         except Exception as e:
-            log.warning("Shell condition template render failed: %s", e)
+            import sys
+            msg = f"[CONDITION ERROR] Shell condition template render failed: {e}"
+            log.error(msg)
+            print(msg, file=sys.stderr)
             return None, False
 
     log.debug("Shell condition: %s", command)
@@ -125,10 +128,16 @@ def _evaluate_shell_condition(command: str, payload: dict) -> tuple:
         log.debug("Shell condition exit=%d passed=%s cmd=%s", result.returncode, passed, command)
         return result.returncode, passed
     except subprocess.TimeoutExpired:
-        log.warning("Shell condition timed out: %s", command)
+        import sys
+        msg = f"[CONDITION ERROR] Shell condition timed out: {command}"
+        log.error(msg)
+        print(msg, file=sys.stderr)
         return None, False
     except Exception as e:
-        log.warning("Shell condition failed: %s — %s", command, e)
+        import sys
+        msg = f"[CONDITION ERROR] Shell condition failed: {command} — {e}"
+        log.error(msg)
+        print(msg, file=sys.stderr)
         return None, False
 
 

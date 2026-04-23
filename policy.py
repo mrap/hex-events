@@ -64,8 +64,8 @@ class Policy:
     requires: dict = field(default_factory=dict)   # {"events": [...]}
     rate_limit: Optional[dict] = None              # {"max_fires": N, "window": "1h"}
     source_file: Optional[str] = None
-    lifecycle: str = "persistent"                  # persistent | oneshot-delete | oneshot-disable
     max_fires: Optional[int] = None               # fire at most N times, then auto-disable
+    after_limit: str = "disable"                 # delete | disable — action when ttl or max_fires limit is hit
     workflow: Optional[str] = None                 # workflow directory name
     workflow_config: dict = field(default_factory=dict)  # from _config.yaml
     # Runtime state — not from YAML
@@ -164,8 +164,8 @@ def _policy_from_new(data: dict, source_file: str) -> Policy:
         provides=dict(data.get("provides") or {}),
         requires=dict(data.get("requires") or {}),
         rate_limit=data.get("rate_limit"),
-        lifecycle=data.get("lifecycle", "persistent"),
         max_fires=data.get("max_fires"),
+        after_limit=data.get("after_limit", "disable"),
         rules=rules,
         source_file=source_file,
     )
@@ -194,6 +194,7 @@ def _policy_from_old(data: dict, source_file: str) -> Policy:
         provides=provides,
         requires=requires,
         rate_limit=None,
+        after_limit=data.get("after_limit", "disable"),
         rules=[rule],
         source_file=source_file,
     )
@@ -208,7 +209,10 @@ def _load_single_policy(fpath: str, workflow_name: str = None,
         with open(fpath) as f:
             data = yaml.safe_load(f)
         if not isinstance(data, dict):
-            log.warning("Skipping non-dict YAML: %s", fpath)
+            import sys
+            msg = f"[POLICY LOAD ERROR] Skipping non-dict YAML: {fpath}"
+            log.error(msg)
+            print(msg, file=sys.stderr)
             return None
         if data.get("enabled") is False:
             log.debug("Skipping disabled policy: %s", fpath)
@@ -219,24 +223,36 @@ def _load_single_policy(fpath: str, workflow_name: str = None,
                 if on_invalid:
                     on_invalid(fpath, errors)
                 else:
+                    import sys
                     for err in errors:
-                        log.warning("[POLICY VALIDATION] %s", err)
+                        msg = f"[POLICY VALIDATION ERROR] {err}"
+                        log.error(msg)
+                        print(msg, file=sys.stderr)
                 return None
             if "name" not in data:
-                log.warning("Skipping policy without name: %s", fpath)
+                import sys
+                msg = f"[POLICY LOAD ERROR] Skipping policy without name: {fpath}"
+                log.error(msg)
+                print(msg, file=sys.stderr)
                 return None
             policy = _policy_from_new(data, source_file=fpath)
         elif _is_old_format(data):
             policy = _policy_from_old(data, source_file=fpath)
         else:
-            log.warning("Skipping unrecognized YAML format: %s", fpath)
+            import sys
+            msg = f"[POLICY LOAD ERROR] Skipping unrecognized YAML format: {fpath}"
+            log.error(msg)
+            print(msg, file=sys.stderr)
             return None
         if workflow_name:
             policy.workflow = workflow_name
             policy.workflow_config = workflow_config or {}
         return policy
     except Exception as e:
-        log.warning("Failed to load policy %s: %s", fpath, e)
+        import sys
+        msg = f"[POLICY LOAD ERROR] Failed to load {fpath}: {e}"
+        log.error(msg)
+        print(msg, file=sys.stderr)
         return None
 
 
@@ -250,7 +266,10 @@ def _load_workflow_config(workflow_dir: str) -> dict:
             data = yaml.safe_load(f)
         return data if isinstance(data, dict) else {}
     except Exception as e:
-        log.warning("Failed to load workflow config %s: %s", config_path, e)
+        import sys
+        msg = f"[POLICY LOAD ERROR] Failed to load workflow config {config_path}: {e}"
+        log.error(msg)
+        print(msg, file=sys.stderr)
         return {}
 
 

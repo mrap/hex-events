@@ -509,11 +509,23 @@ def _dispatch_sub_actions(sub_actions, event_payload, action_result, db,
         atype = raw.get("type")
         handler = get_action_handler(atype)
         if not handler:
+            msg = f"[SUB-ACTION ERROR] Unknown sub-action type: {atype!r} (params={raw})"
+            log.error(msg)
+            print(msg, file=sys.stderr)
             continue
         raw_params = {k: v for k, v in raw.items() if k != "type"}
-        params = render_templates(raw_params, tpl_ctx)
-        handler.run(params, event_payload=event_payload, db=db,
-                    workflow_context=workflow_context)
+        try:
+            params = render_templates(raw_params, tpl_ctx)
+            result = handler.run(params, event_payload=event_payload, db=db,
+                                 workflow_context=workflow_context)
+            if result and result.get("status") == "error":
+                msg = f"[SUB-ACTION ERROR] type={atype!r} failed: {result.get('output', '')}"
+                log.error(msg)
+                print(msg, file=sys.stderr)
+        except Exception as e:
+            msg = f"[SUB-ACTION ERROR] type={atype!r} raised: {e}"
+            log.error(msg)
+            print(msg, file=sys.stderr)
 
 
 def _check_rule_ttl(rule, policy_name: str, db: EventsDB) -> bool:
@@ -558,29 +570,25 @@ def _disable_policy_file(path: str):
     os.rename(tmp_path, path)
 
 
-def _handle_policy_lifecycle(policy, db: EventsDB):
-    """Handle oneshot/max_fires lifecycle after successful policy fire."""
-    lc = getattr(policy, "lifecycle", "persistent")
+def _handle_policy_limits(policy, db: EventsDB):
+    """Handle max_fires + after_limit cleanup after successful policy fire."""
     max_fires = getattr(policy, "max_fires", None)
     path = policy.source_file
-
-    if lc == "oneshot-delete":
-        if path and os.path.exists(path):
-            os.remove(path)
-            log.info("Policy %s fired (oneshot) and self-destructed", policy.name)
-    elif lc == "oneshot-disable":
-        if path and os.path.exists(path):
-            _disable_policy_file(path)
-            log.info("Policy %s fired (oneshot) and disabled", policy.name)
 
     if max_fires is not None:
         fires_so_far = db.count_policy_fires(policy.name)
         total = fires_so_far + 1  # +1 for the current fire (not yet logged)
         if total >= max_fires:
             if path and os.path.exists(path):
-                _disable_policy_file(path)
-                log.info("Policy %s reached max_fires=%d and was auto-disabled",
-                         policy.name, max_fires)
+                after_limit = getattr(policy, "after_limit", "disable")
+                if after_limit == "delete":
+                    os.remove(path)
+                    log.info("Policy %s reached max_fires=%d and was auto-deleted",
+                             policy.name, max_fires)
+                else:
+                    _disable_policy_file(path)
+                    log.info("Policy %s reached max_fires=%d and was auto-disabled",
+                             policy.name, max_fires)
 
 
 def process_event(event: dict, policies: list[Recipe], db: EventsDB):
@@ -625,6 +633,7 @@ def _make_eval_row(event_id, policy_name, rule_name, now_ts, **overrides) -> dic
         "action_taken": 0,
         "evaluated_at": now_ts,
         "workflow": None,
+        "ttl_expired": 0,
     }
     row.update(overrides)
     return row
@@ -641,7 +650,7 @@ def _evaluate_rule(rule, policy, event_id, payload, db, now_ts) -> dict:
                                   "ttl": rule.ttl}),
                       "suppressed", f"TTL expired for rule {rule.name}")
         return _make_eval_row(event_id, policy.name, rule.name, now_ts,
-                              workflow=policy.workflow)
+                              workflow=policy.workflow, ttl_expired=1)
 
     conditions_passed, cond_details = evaluate_conditions_with_details(
         rule.conditions, payload, db=db
@@ -726,9 +735,12 @@ def _process_event_policies(event: dict, policies: list, db: "EventsDB") -> int:
 
         fired = False
         all_actions_succeeded = True
+        ttl_expired_any = False
         for rule in matching_rules:
             eval_row = _evaluate_rule(rule, policy, event_id, payload, db, now_ts)
             eval_rows.append(eval_row)
+            if eval_row.get("ttl_expired"):
+                ttl_expired_any = True
             if eval_row["action_taken"]:
                 matched_names.append(rule.name)
                 fired = True
@@ -739,7 +751,13 @@ def _process_event_policies(event: dict, policies: list, db: "EventsDB") -> int:
         if fired:
             record_fire(policy)
             if all_actions_succeeded:
-                _handle_policy_lifecycle(policy, db)
+                _handle_policy_limits(policy, db)
+        if ttl_expired_any and getattr(policy, "after_limit", "disable") == "delete":
+            path = policy.source_file
+            if path and os.path.exists(path):
+                os.remove(path)
+                log.info("Policy %s rules expired (TTL) with after_limit=delete — file removed",
+                         policy.name)
 
     if eval_rows:
         try:
@@ -1001,11 +1019,21 @@ def run_daemon():
                 and (now - ref_time) > STALL_THRESHOLD_SECONDS
             )
             if health.processing_stalled:
-                log.warning(
-                    "Processing stalled: %d unprocessed events, last processed %.0fs ago",
-                    unprocessed_count,
-                    now - ref_time,
+                msg = (
+                    f"[PROCESSING STALL] {unprocessed_count} unprocessed events, "
+                    f"last processed {now - ref_time:.0f}s ago"
                 )
+                log.error(msg)
+                print(msg, file=sys.stderr)
+                try:
+                    db.insert_event(
+                        "hex.eventd.processing.stalled",
+                        json.dumps({"unprocessed_count": unprocessed_count,
+                                    "stalled_seconds": int(now - ref_time)}),
+                        "hex_eventd",
+                    )
+                except Exception:
+                    pass
             health.write_health_file(unprocessed_count=unprocessed_count)
             last_health_write = now
 

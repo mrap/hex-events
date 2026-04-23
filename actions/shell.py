@@ -12,7 +12,11 @@ class ShellAction:
         tpl_ctx = {"event": event_payload}
         if workflow_context:
             tpl_ctx["workflow"] = workflow_context
-        command = render_templates({"command": command}, tpl_ctx)["command"]
+        try:
+            command = render_templates({"command": command}, tpl_ctx)["command"]
+        except Exception as e:
+            return {"status": "error", "output": f"Template render failed: {e}",
+                    "_action_result": {"stderr": str(e), "returncode": -1}}
         try:
             result = subprocess.run(
                 command, shell=True, executable="/bin/bash",

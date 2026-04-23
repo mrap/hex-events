@@ -4,7 +4,6 @@ import yaml
 
 VALID_ACTION_TYPES = {"shell", "emit", "notify", "update-file"}
 VALID_CONDITION_OPS = {"eq", "neq", "contains", "gt", "lt", "gte", "lte", "glob", "regex"}
-VALID_LIFECYCLE_VALUES = {"persistent", "oneshot-delete", "oneshot-disable"}
 _DURATION_RE = re.compile(r"^\d+[smhd]$")
 
 
@@ -40,17 +39,22 @@ def validate_policy(policy: dict, filename: str = "<unknown>") -> list[str]:
 
     lifecycle = policy.get("lifecycle")
     if lifecycle is not None:
-        if lifecycle not in VALID_LIFECYCLE_VALUES:
-            errors.append(
-                f"{filename}: invalid 'lifecycle' value '{lifecycle}' "
-                f"(expected: {', '.join(sorted(VALID_LIFECYCLE_VALUES))})"
-            )
+        errors.append(
+            f"{filename}: 'lifecycle' is deprecated — use 'max_fires' + 'after_limit' instead"
+        )
 
     max_fires = policy.get("max_fires")
     if max_fires is not None:
         if not isinstance(max_fires, int) or max_fires <= 0:
             errors.append(
                 f"{filename}: 'max_fires' must be a positive integer, got {max_fires!r}"
+            )
+
+    after_limit = policy.get("after_limit")
+    if after_limit is not None:
+        if after_limit not in ("delete", "disable"):
+            errors.append(
+                f"{filename}: invalid 'after_limit' value {after_limit!r} — must be 'delete' or 'disable'"
             )
 
     rules = policy.get("rules")
