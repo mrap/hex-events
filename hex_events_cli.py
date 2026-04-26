@@ -610,8 +610,38 @@ def cmd_validate(args):
     print()
     print(f"Summary: {valid_count} valid, {invalid_count} invalid")
 
+    # --- Contract verification: dead triggers + orphan events ---
+    _run_contract_check(files)
+
     if invalid_count > 0:
         sys.exit(1)
+
+
+def _run_contract_check(policy_paths: list) -> None:
+    """Run cross-event contract verification and print results."""
+    try:
+        from validators import contract_validator
+    except ImportError:
+        return
+
+    scripts_dirs = [
+        os.path.expanduser("~/.boi/src"),
+        os.path.expanduser("~/mrap-hex/.hex/scripts"),
+        os.path.join(BASE_DIR, "scripts") if os.path.isdir(os.path.join(BASE_DIR, "scripts")) else "",
+    ]
+    scripts_dirs = [d for d in scripts_dirs if d and os.path.isdir(d)]
+
+    issues = contract_validator.validate_corpus(policy_paths, scripts_dirs=scripts_dirs)
+
+    errors = [i for i in issues if i["severity"] == "error"]
+    warnings = [i for i in issues if i["severity"] == "warning"]
+
+    print()
+    print(f"contract check: {len(policy_paths)} policies · {len(errors)} dead trigger(s) · {len(warnings)} orphan event(s)")
+
+    for issue in sorted(issues, key=lambda i: (i["severity"], i["message"])):
+        severity_label = "ERROR" if issue["severity"] == "error" else "WARNING"
+        print(f"  [{severity_label}] {issue['message']}")
 
 
 def cmd_graph(args):
