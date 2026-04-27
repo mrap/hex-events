@@ -1,3 +1,12 @@
+# ⚠️ ARCHIVED — Merged into hex-foundation
+
+This repo has been merged into [hex-foundation](https://github.com/mrap/hex-foundation)
+at `system/events/` as of v0.8.0 (2026-04-27).
+
+All future development happens in hex-foundation. This repo is kept for history only.
+
+---
+
 # hex-events
 
 Reactive event system for [hex](https://github.com/mrap/hex). Policy-driven automation — emit events, match conditions, fire actions.
