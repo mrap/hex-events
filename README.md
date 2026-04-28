@@ -1,3 +1,35 @@
+# ⚠️ ARCHIVED — Merged into hex-foundation (v0.8.0)
+
+**This repo has been merged into [hex-foundation](https://github.com/mrap/hex) at `system/events/` as of v0.8.0 (2026-04-27).**
+
+All future hex-events development happens in hex-foundation. This repo is kept for historical reference only.
+
+## What moved where
+
+| This repo | hex-foundation |
+|-----------|---------------|
+| `hex_eventd.py` | `system/events/hex_eventd.py` |
+| `hex_emit.py` | `system/events/hex_emit.py` |
+| `hex_events_cli.py` | `system/events/hex_events_cli.py` |
+| `conditions.py` | `system/events/conditions.py` |
+| `db.py` | `system/events/db.py` |
+| `actions/` | `system/events/actions/` |
+| `adapters/` | `system/events/adapters/` |
+| `policies/` | `system/events/policies/` |
+| `tests/` | `tests/events/` |
+| `docs/` | `system/events/docs/` |
+
+## Migration
+
+If you're running hex-events standalone, upgrade to hex-foundation v0.8.0:
+```bash
+cd ~/hex && bash .hex/scripts/upgrade.sh
+```
+
+The installer deploys hex-events from `system/events/` — no external clone needed.
+
+---
+
 # ⚠️ ARCHIVED — Merged into hex-foundation
 
 This repo has been merged into [hex-foundation](https://github.com/mrap/hex-foundation)
